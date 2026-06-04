@@ -885,21 +885,30 @@ function registerBuiltins() {
   // layout-only). BlendShape edit needs to know which shape, so it's
   // NOT bound here; user enters from BlendShapeTab's Edit button.
   //
-  // Ctrl+Tab — Blender pattern: when the active selection is an
-  // armature, toggle Pose Mode (matches `OBJECT_OT_mode_set` with
-  // mode='POSE'). Otherwise pop the ModePill mode menu so the user can
-  // pick a mode for any other selection type. Always available —
-  // exec self-routes by selection.
+  // Ctrl+Tab — INTENTIONAL DEVIATION from Blender per user request
+  // (2026-06-04 audit fix). Blender's `Ctrl+Tab` binds to
+  // `view3d.object_mode_pie_or_toggle` (a PIE menu showing
+  // Object/Edit/Pose for armatures — the user picks). SS chose
+  // armature-direct Pose toggle because:
+  //   (a) SS has no pie-menu infra (RULE-№2: don't ship one just for
+  //       this chord),
+  //   (b) The user explicitly asked for "ctrl+tab → pose when armature
+  //       selected" muscle memory.
+  // Non-armature selections still fall back to the ModePill mode menu.
+  // Calling this "Blender pattern" without qualification would mislead
+  // future readers — Blender actually shows a pie menu for every type
+  // including armatures. The audit (2026-06-04) caught the prior
+  // attribution; this comment corrects it.
   registerOperator({
     id: 'mode.menu',
     label: 'Pose Mode / Mode Menu (Ctrl+Tab)',
     available: () => true,
     exec: () => {
       // Armature-direct path — Ctrl+Tab on an armature/bone selection
-      // toggles Pose Mode directly (Blender muscle memory). If already
-      // in Pose Mode on this armature, exit back to Object Mode; if in
-      // a different edit mode (e.g. mesh edit), still switch to Pose;
-      // otherwise enter Pose.
+      // toggles Pose Mode directly (see header for why this deviates
+      // from Blender's pie). If already in Pose Mode on this armature,
+      // exit back to Object Mode; if in a different edit mode (e.g.
+      // mesh edit), still switch to Pose; otherwise enter Pose.
       const ed = useEditorStore.getState();
       const active = useSelectionStore.getState().getActive();
       if (active) {

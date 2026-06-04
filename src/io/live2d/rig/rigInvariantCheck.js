@@ -280,15 +280,30 @@ export function runRigInvariantChecks(project) {
     const mesh = n.mesh;
     const vCount = vertexCountOf(mesh?.vertices);
     if (vCount === 0) continue; // no mesh — skip (legitimate for some part types)
-    // Skip parts the renderer will skip outright. `variantNormalizer.js`
-    // sets `visible:false` on every detected variant so it stays hidden
-    // at rest pose (the variant fade ramps it back in on Param<Suffix>).
-    // Those variants legitimately have no rigwarp + no modifier stack
-    // because the rig pipeline filters them out at `buildMeshesForRig`
-    // (`exporter.js:823`) — render-path filters do the same downstream.
-    // Without this skip, every variant fires I-1 with "renders at canvas
-    // origin" which is wrong: the renderer never reaches them, hidden
-    // means hidden. Invariants check WHAT WILL BE RENDERED.
+    // Skip parts the renderer will skip outright (user-explicit hide via
+    // outliner toggle).
+    //
+    // # Why this is NOT the variant-skip path post-v49 (2026-06-04 audit)
+    //
+    // Pre-v49, `variantNormalizer.js` set `variant.visible = false` so
+    // every detected variant fell here AND was filtered out of every
+    // `n.visible !== false` rig pipeline gate (the bug-08 root cause).
+    // Variants had empty modifiers because they never entered the rig
+    // pipeline; this skip prevented I-1 false positives.
+    //
+    // Post-v49 (bug-08 closure), variants are `visible:true,
+    // opacity:0` — they ENTER the rig pipeline, `seedAllRig` populates
+    // their `modifiers[]` from `rigCollector.artMeshes`, and I-1 finds
+    // a non-empty stack. So this skip no longer needs a variant-aware
+    // branch: variants pass I-1 on their own merits.
+    //
+    // The skip still has value for user-hidden parts (outliner toggle
+    // off): the renderer's `visMap` check at `scenePass.js:219` skips
+    // them too, so invariants checking "what will be rendered" should
+    // skip them as well. `runRigInvariantChecks` runs only post-seed
+    // (`RigService.js:308` + `:610`), so any variant that's empty here
+    // is either pre-Init-Rig (shouldn't happen — Init Rig owns this
+    // call) or a genuine seed failure (which I-1 SHOULD surface).
     if (n.visible === false) continue;
 
     // I-1: at least one modifier

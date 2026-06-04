@@ -187,27 +187,81 @@ function tallStripMesh() {
   eq(result.retriangulated, true, '8: knife result marks retriangulated:true');
 }
 
-// ── 9. Cut through a third vertex (line passes exactly through a
-//        non-endpoint vert): the triangle should subdivide cleanly.
-//        Take the tall strip; cut from vert 3 (top-left) to vert 4
-//        (bottom-left). Both are on x=0 line. The line passes through
-//        vert 0 (also x=0). Triangles (0,1,2) and (4,0,1) have vert 0
-//        on the line; triangles (0,2,3) and (4,1,5) — wait, (0,2,3)
-//        has verts (0,10), (10,20), (0,20); side(0) = 0 because (0,y) is
-//        on the line x=0; side(2) = dirX*(y-aY) - dirY*(x-aX). Let me
-//        compute: A = vert 3 = (0, 20), B = vert 4 = (0, 0). dirX=0,
-//        dirY=-20. For vert 0 (0, 10): cross = 0*(10-20) - (-20)*(0-0) = 0.
-//        For vert 2 (10, 20): cross = 0*(20-20) - (-20)*(10-0) = 200 > 0.
-//        For vert 1 (10, 10): cross = 0*(10-20) - (-20)*(10-0) = 200 > 0.
-//        For vert 5 (10, 0): cross = 0*(0-20) - (-20)*(10-0) = 200 > 0.
-//        All non-endpoint verts on the right are side=1; all left verts
-//        are on the line. NO triangle has opposite-sign endpoints —
-//        cut is a no-op.
+// ── 9. Winding preservation — every sub-triangle has the SAME
+//        signed-area sign as the original it came from.
+//
+// 2026-06-04 audit response: F1 finding ("Knife Case S2 third
+// sub-triangle wound CW instead of CCW") was a false positive.
+// The agent's residual-quad analysis miscomputed which corner-triple
+// fills the gap. This test locks the correct winding so future
+// regressions surface as a failed assertion instead of as silent
+// downstream signed-area corruption.
+function signedArea(a, b, c) {
+  return 0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+}
+{
+  // Standard CCW triangle (signed area > 0 in y-up math convention SS uses).
+  const mesh = {
+    vertices: [
+      { x: 0,  y: 0,  restX: 0,  restY: 0 },   // solo (top)
+      { x: -1, y: -1, restX: -1, restY: -1 },  // p (bottom-left)
+      { x: 1,  y: -1, restX: 1,  restY: -1 },  // q (bottom-right)
+    ],
+    uvs: new Float32Array([0.5,1, 0,0, 1,0]),
+    triangles: [[0, 1, 2]],
+  };
+  // Sanity: original is CCW.
+  assert(signedArea(mesh.vertices[0], mesh.vertices[1], mesh.vertices[2]) > 0,
+    '9: original triangle is CCW (signed area > 0)');
+  // Cut horizontally between solo and the base. Need two vert indices
+  // for the cut endpoints — pick verts that lie ON the cut line. Add
+  // two helper verts at y=-0.5 (the cut height) extending outside the
+  // triangle so the line from helper-3 to helper-4 actually slices it.
+  mesh.vertices.push({ x: -2, y: -0.5 }); // 3
+  mesh.vertices.push({ x: 2,  y: -0.5 }); // 4
+  const uvAddend = new Float32Array(10);
+  uvAddend.set(mesh.uvs);
+  uvAddend[3 * 2 + 0] = 0; uvAddend[3 * 2 + 1] = 0.5;
+  uvAddend[4 * 2 + 0] = 1; uvAddend[4 * 2 + 1] = 0.5;
+  mesh.uvs = uvAddend;
+  const result = cutMeshAlongLine(mesh, 3, 4);
+  assert(result != null, '9: precondition — cut produces a result');
+  // Verify EVERY output triangle has positive signed area (CCW), since
+  // the only original triangle was CCW. Case S2's three sub-triangles
+  // must all preserve the sign.
+  let allCCW = true;
+  for (let i = 0; i < result.triangles.length; i++) {
+    const [a, b, c] = result.triangles[i];
+    const A = result.vertices[a];
+    const B = result.vertices[b];
+    const C = result.vertices[c];
+    const sa = signedArea(A, B, C);
+    if (sa <= 0) {
+      allCCW = false;
+      console.error(`  triangle ${i} (verts ${a},${b},${c}) has signed area ${sa} (CW or degenerate)`);
+    }
+  }
+  assert(allCCW, '9: every sub-triangle preserves the original CCW winding');
+  // Also verify the cumulative signed area equals the original (no
+  // overlap, no gap, no triangle counted twice with wrong orientation).
+  // Triangle (0,1,2) has signed area = 0.5 * ((-1-0)*(-1-0) - (-1-0)*(1-0)) = 0.5 * (1 - (-1)) = 1.0.
+  let totalArea = 0;
+  for (const [a, b, c] of result.triangles) {
+    totalArea += signedArea(result.vertices[a], result.vertices[b], result.vertices[c]);
+  }
+  const expectedArea = 1.0;
+  assert(Math.abs(totalArea - expectedArea) < 1e-9,
+    `9: total signed area after cut equals original (got ${totalArea}, expected ${expectedArea})`);
+}
+
+// ── 11. Cut along boundary: line passes through a third vert AND lies
+//        on triangle edges (all triangles fall in the "no cross" or
+//        "co-linear edge" buckets) → null no-op.
 {
   const mesh = tallStripMesh();
   const result = cutMeshAlongLine(mesh, 3, 4);
   eq(result, null,
-    '9: cut along boundary (all triangles same-sign or on-line) → null');
+    '11: cut along boundary (all triangles same-sign or on-line) → null');
 }
 
 console.log(`\nknifeCut: ${passed} passed, ${failed} failed`);
