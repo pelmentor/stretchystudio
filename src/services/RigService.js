@@ -20,7 +20,7 @@
  * @module services/RigService
  */
 
-import { useRigSpecStore } from '../store/rigSpecStore.js';
+import { useRigSpecStore, attachPhysicsRulesToRigSpec } from '../store/rigSpecStore.js';
 import { useProjectStore } from '../store/projectStore.js';
 import { useParamValuesStore } from '../store/paramValuesStore.js';
 // Phase A2 (2026-05-09) — `initializeRigFromProject` and
@@ -29,7 +29,6 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 // (eager via AppShell), but the heavy rig pipeline (cmo3/moc3/can3
 // writers + exporter graph) only loads when a user actually triggers
 // initializeRig / runStage / refitAll.
-import { gatherPhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
 import { runRigInitIdentityDiag } from '../io/live2d/rig/rigInitIdentityDiag.js';
 import { resolveAutoRigConfig } from '../io/live2d/rig/autoRigConfig.js';
@@ -325,7 +324,7 @@ export async function initializeRig() {
     let rigSpec = harvest.rigSpec ?? null;
     if (rigSpec) {
       const postSeedProject = useProjectStore.getState().project;
-      rigSpec = { ...rigSpec, physicsRules: gatherPhysicsRules(postSeedProject) };
+      rigSpec = attachPhysicsRulesToRigSpec(rigSpec, postSeedProject);
     }
     useRigSpecStore.setState({
       rigSpec,

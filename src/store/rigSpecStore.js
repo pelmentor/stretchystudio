@@ -15,6 +15,22 @@ import { logger } from '../lib/logger.js';
 import { getMesh } from './objectDataAccess.js';
 
 /**
+ * Attach the runtime physics rule list onto a rigSpec. Single source
+ * of truth — both `buildRigSpec` and `RigService.initializeRig` write
+ * via this helper so the two attach sites never silently diverge on
+ * gather options or post-seed project shape (Phase 3 cleanup,
+ * 2026-06-08).
+ *
+ * @param {object|null} rigSpec
+ * @param {object} project
+ * @returns {object|null}
+ */
+export function attachPhysicsRulesToRigSpec(rigSpec, project) {
+  if (!rigSpec) return rigSpec;
+  return { ...rigSpec, physicsRules: gatherPhysicsRules(project) };
+}
+
+/**
  * v2 R1 — RigSpec session cache.
  *
  * Holds the current `rigSpec` (the shape consumed by the v2 evaluator
@@ -106,7 +122,7 @@ export const useRigSpecStore = create((set, get) => ({
       let rigSpec = harvest.rigSpec ?? null;
       if (rigSpec) {
         const postSeedProject = useProjectStore.getState().project;
-        rigSpec = { ...rigSpec, physicsRules: gatherPhysicsRules(postSeedProject) };
+        rigSpec = attachPhysicsRulesToRigSpec(rigSpec, postSeedProject);
         _seedDefaultsForRig(rigSpec, postSeedProject);
       }
       set({
