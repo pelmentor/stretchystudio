@@ -139,8 +139,10 @@ import {
   Music,
   Upload,
   ChevronDown,
+  Pencil,
 } from 'lucide-react';
 import { parseMotion3Json } from '../../io/live2d/motion3jsonImport.js';
+import { uniqueName } from '../../lib/uniqueName.js';
 import { getActiveSceneAction, getSceneAction } from '../../anim/sceneAction.js';
 import { AUTOKEY_MODES, getAutoKeyMode } from '../../anim/autoKeyDispatch.js';
 import {
@@ -342,6 +344,25 @@ export function PlaybackControls() {
 
   const motionFileRef = useRef(null);
 
+  /* ── Inline rename state for the active-action picker ──────────────────
+   * Mirrors Blender's `uiTemplateID` widget (action selector in the dope
+   * sheet header): the active datablock's name is itself an editable text
+   * field. Click the pencil (or hit F2 with the timeline focused) to swap
+   * the `<select>` for an `<input>`. Enter commits, Escape cancels, blur
+   * commits. Same `.001` collision-suffix as the idle motion dialog —
+   * shared `uniqueName` util.
+   *
+   * Blender reference:
+   *   - source/blender/editors/interface/templates/interface_template_id.cc
+   *   - F2 → UI_OT_view_item_rename
+   *     (scripts/presets/keyconfig/keymap_data/blender_default.py:1074)
+   */
+  const [renamingActionId, setRenamingActionId] = useState(
+    /** @type {string | null} */ (null)
+  );
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef(/** @type {HTMLInputElement | null} */ (null));
+
   /* ── Active action object ───────────────────────────────────────────── */
   // Same getActiveSceneAction semantics as TimelineEditor: scene
   // binding wins over UI-store fallback (Stage 1.E). Re-resolved on
@@ -349,6 +370,71 @@ export function PlaybackControls() {
   // slots; useMemo would gain little and add a dep-array maintenance
   // burden.
   const animation = getActiveSceneAction(proj, activeActionId);
+
+  const beginRename = useCallback(() => {
+    if (!animation) return;
+    setRenamingActionId(animation.id);
+    setRenameDraft(animation.name ?? '');
+  }, [animation]);
+
+  const commitRename = useCallback(() => {
+    if (!renamingActionId) return;
+    const trimmed = renameDraft.trim();
+    if (trimmed) {
+      const current = proj.actions.find((a) => a.id === renamingActionId);
+      // Skip the store write when the name is unchanged — avoids a
+      // spurious undo entry for a no-op edit.
+      if (current && current.name !== trimmed) {
+        const taken = new Set(
+          proj.actions
+            .filter((a) => a.id !== renamingActionId)
+            .map((a) => a.name)
+        );
+        const final = uniqueName(trimmed, taken);
+        useProjectStore.getState().renameAction(renamingActionId, final);
+      }
+    }
+    setRenamingActionId(null);
+    setRenameDraft('');
+  }, [renamingActionId, renameDraft, proj.actions]);
+
+  const cancelRename = useCallback(() => {
+    setRenamingActionId(null);
+    setRenameDraft('');
+  }, []);
+
+  // Auto-focus + select-all when entering rename mode. Mirrors Blender's
+  // begin-rename behaviour (input gets focus, full name selected so the
+  // user can either edit-in-place or type-to-replace).
+  useEffect(() => {
+    if (!renamingActionId) return;
+    const el = renameInputRef.current;
+    if (el) { el.focus(); el.select(); }
+  }, [renamingActionId]);
+
+  // F2 — Blender's universal rename shortcut. Wired to the active
+  // action when nothing editable is focused (so it doesn't fire while
+  // the user is typing in some other input). Gate matches Blender's
+  // `view_item_begin_rename` which is a UI-level operator: it only
+  // fires when the cursor is over a renameable widget.
+  useEffect(() => {
+    /** @param {KeyboardEvent} e */
+    const onKey = (e) => {
+      if (e.key !== 'F2' || e.repeat) return;
+      if (!animation) return;
+      const tgt = /** @type {HTMLElement | null} */ (e.target);
+      if (tgt && (
+        tgt.tagName === 'INPUT'
+        || tgt.tagName === 'TEXTAREA'
+        || tgt.tagName === 'SELECT'
+        || tgt.isContentEditable
+      )) return;
+      e.preventDefault();
+      beginRename();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [animation, beginRename]);
 
   /* ── Derived values ─────────────────────────────────────────────────── */
   const currentFrame = msToFrame(currentTime, fps);
@@ -648,32 +734,71 @@ export function PlaybackControls() {
           a "see TimelineEditor.jsx's pre-lift comment" cite that no
           longer exists after the row was lifted. */}
       {hasAnimation ? (
-        <select
-          value={animation?.id ?? ''}
-          onChange={(e) => {
-            const id = e.target.value;
-            const a = proj.actions.find((x) => x.id === id);
-            const animApi = useAnimationStore.getState();
-            animApi.setActiveActionId(id);
-            if (getSceneAction(proj)) {
-              useProjectStore.getState().assignAction('__scene__', id, 0);
-            }
-            if (a) {
-              const f = a.fps ?? 24;
-              animApi.setFps(f);
-              animApi.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
-              animApi.seekFrame(0);
-            }
-          }}
-          className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
-          title="Active action — switch to preview a different motion. (Re-binds Scene when one is bound.)"
-        >
-          {proj.actions.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name ?? a.id}
-            </option>
-          ))}
-        </select>
+        renamingActionId && renamingActionId === animation?.id ? (
+          /* Inline rename mode (Blender uiTemplateID: active datablock
+             name is the editable text field). Enter commits, Escape
+             cancels, blur commits — matches Blender's text-button
+             button_func_rename_full_set handler. */
+          <input
+            ref={renameInputRef}
+            type="text"
+            value={renameDraft}
+            onChange={(e) => setRenameDraft(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
+              else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+            }}
+            maxLength={120}
+            className="h-6 text-[10px] px-1 rounded border border-primary bg-background text-foreground max-w-[140px]"
+            title="Enter = commit, Escape = cancel"
+          />
+        ) : (
+          <>
+            <select
+              value={animation?.id ?? ''}
+              onChange={(e) => {
+                const id = e.target.value;
+                const a = proj.actions.find((x) => x.id === id);
+                const animApi = useAnimationStore.getState();
+                animApi.setActiveActionId(id);
+                if (getSceneAction(proj)) {
+                  useProjectStore.getState().assignAction('__scene__', id, 0);
+                }
+                if (a) {
+                  const f = a.fps ?? 24;
+                  animApi.setFps(f);
+                  animApi.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * f));
+                  animApi.seekFrame(0);
+                }
+              }}
+              onDoubleClick={beginRename}
+              className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
+              title="Active action — switch to preview a different motion. Double-click (or F2) to rename. (Re-binds Scene when one is bound.)"
+            >
+              {proj.actions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name ?? a.id}
+                </option>
+              ))}
+            </select>
+            {/* Pencil button — explicit rename trigger so the gesture
+                is discoverable. Double-click on the select + F2 keymap
+                are the keyboard-shortcut paths; this button is the
+                mouse-discoverable one. Mirrors how Blender's
+                template_action gives you both the inline text field AND
+                the surrounding browse widgets. */}
+            <button
+              type="button"
+              onClick={beginRename}
+              className="h-6 px-1 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors inline-flex items-center"
+              title="Rename action (F2)"
+              aria-label="Rename active action"
+            >
+              <Pencil size={10} />
+            </button>
+          </>
+        )
       ) : null}
 
       {/* New animation — always creates a fresh clip; existing ones remain

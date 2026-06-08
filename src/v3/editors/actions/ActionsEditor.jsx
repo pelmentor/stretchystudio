@@ -91,6 +91,7 @@ import { getSceneAction, getSceneNode } from '../../../anim/sceneAction.js';
 import { toast } from '../../../hooks/use-toast.js';
 import * as AlertDialogImpl from '../../../components/ui/alert-dialog.jsx';
 import { IdleMotionDialog } from './IdleMotionDialog.jsx';
+import { uniqueName } from '../../../lib/uniqueName.js';
 
 // shadcn/ui alert-dialog parts are forwardRefs without exported
 // JSDoc types — tsc can't see their props. Cast through one alias
@@ -167,7 +168,22 @@ export function ActionsEditor() {
     setEditValue(a.name ?? '');
   }
   function commitEdit() {
-    if (editingId && editValue.trim()) renameAction(editingId, editValue.trim());
+    if (editingId) {
+      const trimmed = editValue.trim();
+      const current = project.actions.find((a) => a.id === editingId);
+      // Skip the store write on no-op + dedupe via uniqueName so two
+      // actions never collide on the same name (would silently overwrite
+      // each other's exported .motion3.json — see uniqueName JSDoc).
+      if (trimmed && current && current.name !== trimmed) {
+        const taken = new Set(
+          project.actions
+            .filter((a) => a.id !== editingId)
+            .map((a) => a.name)
+        );
+        const final = uniqueName(trimmed, taken);
+        renameAction(editingId, final);
+      }
+    }
     setEditingId(null);
   }
   function cancelEdit() {
