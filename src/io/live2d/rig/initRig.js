@@ -101,24 +101,41 @@ function physicsRuleSubsystem(ruleName) {
 }
 
 /**
- * Filter a populated `rigSpec` into the three seedable shapes:
+ * Filter a populated `rigSpec` into the four seedable shapes:
  *   - `faceParallaxSpec`: the single FaceParallax warp (or null).
  *   - `bodyWarpChain`: the full chain object stashed on rigCollector by
  *     cmo3writer (or null when the chain didn't build).
  *   - `rigWarps`: `partId → spec` map of per-mesh rig warps (those with
  *     `targetPartId` set; never includes face/body/neck).
+ *   - `disabledTargetPartIds`: Set of partIds whose owning subsystem is
+ *      flagged false in `subsystems`. The rigWarps are STILL included
+ *      in the `rigWarps` map; consumers (seedRigWarps) write the modifier
+ *      with `enabled: false` so the renderer's Blender-style modifier
+ *      gate (`isModifierEnabled`) treats it as a rest-grid pass-through.
+ *      This keeps the part visible at its authored position with no sway,
+ *      instead of disappearing (empty `modifiers[]` → render at canvas
+ *      origin — see [[rigInvariantCheck]] I-1 / I-21).
  *
  * Pure — exported so unit tests can exercise the filter logic without
  * spinning up the full export pipeline.
  *
- * **GAP-008 subsystem opt-out:** when `subsystems` is provided, outputs
- * matching disabled subsystems are dropped:
- *   - `faceRig: false` → `faceParallaxSpec = null`
+ * **Subsystem opt-out semantics (revised 2026-06-08):**
+ *   - `faceRig: false` → `faceParallaxSpec = null`, `neckWarpSpec = null`
  *   - `bodyWarps: false` → `bodyWarpChain = null`
- *   - `hairRig`/`clothingRig`/`eyeRig`/`mouthRig: false` → `rigWarps`
- *      filtered by `nodeId → tag → TAG_TO_SUBSYSTEM` lookup. `nodes`
- *      param is required for this lookup; pass `project.nodes` from the
- *      caller.
+ *   - `hairRig`/`clothingRig`/`eyeRig`/`mouthRig: false` → matching rigWarps
+ *      are kept in `rigWarps` map but their partIds land in
+ *      `disabledTargetPartIds`. `nodes` param is required for the tag
+ *      lookup; pass `project.nodes` from the caller.
+ *
+ * Pre-revision (GAP-008) the harvest STRIPPED hair/clothing/eye/mouth
+ * warps from the map. That left their part's `modifiers[]` empty after
+ * seedRigWarps and produced I-1/I-21 "part renders at (1,1)" violations
+ * because the renderer reads `part.modifiers[]` directly. PP1-002's
+ * rigSpec-level neutralisation (`applySubsystemOptOutToRigSpec`, retired
+ * 2026-06-08) was dead code post-chainEval-retirement (`146b716`) — the
+ * depgraph chain walk starts from `part.modifiers[]`, not
+ * `rigSpec.warpDeformers`. The disabled-Set flow makes the modifier-flag
+ * the single source of truth, mirroring Blender's per-modifier toggle.
  *
  * @param {object} rigSpec
  * @param {{
@@ -128,12 +145,20 @@ function physicsRuleSubsystem(ruleName) {
  * @returns {{
  *   faceParallaxSpec: object|null,
  *   bodyWarpChain: object|null,
+ *   neckWarpSpec: object|null,
  *   rigWarps: Map<string, object>,
+ *   disabledTargetPartIds: Set<string>,
  * }}
  */
 export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
   if (!rigSpec || !Array.isArray(rigSpec.warpDeformers)) {
-    return { faceParallaxSpec: null, bodyWarpChain: null, neckWarpSpec: null, rigWarps: new Map() };
+    return {
+      faceParallaxSpec: null,
+      bodyWarpChain: null,
+      neckWarpSpec: null,
+      rigWarps: new Map(),
+      disabledTargetPartIds: new Set(),
+    };
   }
 
   const subs = opts.subsystems ?? null;
@@ -144,6 +169,7 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
   let faceParallaxSpec = null;
   let neckWarpSpec = null;
   const rigWarps = new Map();
+  const disabledTargetPartIds = new Set();
   for (const spec of rigSpec.warpDeformers) {
     if (!spec) continue;
     if (spec.id === FACE_PARALLAX_WARP_ID) {
@@ -166,11 +192,17 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
       continue;
     }
     if (typeof spec.targetPartId === 'string' && spec.targetPartId.length > 0) {
-      // GAP-008 — tag-based subsystem filter. Unknown tags pass through.
+      // Tag-based subsystem flag — unknown tags pass through (untagged
+      // parts never disable). When the subsystem is OFF, we keep the
+      // warp in the map but record the partId so seedRigWarps writes
+      // the modifier with `enabled: false` (Blender modifier-toggle
+      // parity). See doc comment above for the why.
       if (subs && partIdToTag) {
         const tag = partIdToTag.get(spec.targetPartId);
         const owningSubsystem = tag ? TAG_TO_SUBSYSTEM[tag] ?? null : null;
-        if (owningSubsystem && subs[owningSubsystem] === false) continue;
+        if (owningSubsystem && subs[owningSubsystem] === false) {
+          disabledTargetPartIds.add(spec.targetPartId);
+        }
       }
       rigWarps.set(spec.targetPartId, spec);
     }
@@ -181,7 +213,7 @@ export function harvestSeedFromRigSpec(rigSpec, opts = {}) {
     ? null
     : (rigSpec.bodyWarpChain ?? null);
 
-  return { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps };
+  return { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps, disabledTargetPartIds };
 }
 
 /**
@@ -201,96 +233,6 @@ function buildPartIdToTagMap(nodes) {
     if (tag) m.set(n.id, tag);
   }
   return m;
-}
-
-/**
- * PP1-002 — neutralise subsystem-disabled rigWarps in a heuristic-path
- * rigSpec. Previously-shipped GAP-008 work filtered the seed-output
- * (`project.rigWarps` storage) but left `rigSpec.warpDeformers` intact,
- * so the live evaluator (chainEval) still applied disabled-subsystem
- * warps and the user saw hair sway during body lean even with
- * `hairRig=false`.
- *
- * Algorithm: identify per-part rigWarps owned by disabled subsystems
- * (tag → TAG_TO_SUBSYSTEM lookup) and replace each one with an inert
- * pass-through:
- *   - `bindings: []`               — no params drive the warp.
- *   - `keyforms: [keyforms[0]]`    — only the rest grid survives.
- *
- * `cellSelect` with empty bindings returns the rest keyform with weight
- * 1 ([cellSelect.js:59](../runtime/evaluator/cellSelect.js#L59)), so the
- * warp evaluates to its rest grid every frame regardless of param
- * values. Bilinear FFD through that rest grid is identity within the
- * warp's bbox — input verts pass through to the parent's frame
- * unchanged. The art mesh stays at its rest canvas position with no
- * sway.
- *
- * Why neutralise instead of drop+reparent: dropping the warp would
- * orphan the art mesh's verts. The verts are stored in the dropped
- * warp's normalised 0..1 frame; reparenting to a different warp /
- * rotation / root would mismatch the frame and put the part at the
- * wrong location. Neutralising keeps the chain coord-correct.
- *
- * Pure: returns a new rigSpec, leaves the input untouched.
- *
- * @param {object} rigSpec
- * @param {{
- *   subsystems?: import('./autoRigConfig.js').AutoRigSubsystems|null,
- *   nodes?: Array<{id:string, name?:string}>,
- * }} [opts]
- * @returns {{rigSpec:object, neutralisedWarpIds:string[]}}
- */
-export function applySubsystemOptOutToRigSpec(rigSpec, opts = {}) {
-  if (!rigSpec || !Array.isArray(rigSpec.warpDeformers)) {
-    return { rigSpec, neutralisedWarpIds: [] };
-  }
-  const subs = opts.subsystems ?? null;
-  if (!subs) return { rigSpec, neutralisedWarpIds: [] };
-
-  const partIdToTag = opts.nodes ? buildPartIdToTagMap(opts.nodes) : null;
-  if (!partIdToTag) return { rigSpec, neutralisedWarpIds: [] };
-
-  // Identify per-part rigWarps owned by disabled subsystems.
-  const neutralised = new Set();
-  for (const spec of rigSpec.warpDeformers) {
-    if (!spec) continue;
-    if (typeof spec.targetPartId !== 'string' || spec.targetPartId.length === 0) continue;
-    const tag = partIdToTag.get(spec.targetPartId);
-    const owning = tag ? TAG_TO_SUBSYSTEM[tag] ?? null : null;
-    if (owning && subs[owning] === false) neutralised.add(spec.id);
-  }
-  if (neutralised.size === 0) return { rigSpec, neutralisedWarpIds: [] };
-
-  const newWarps = rigSpec.warpDeformers.map((w) => {
-    if (!w?.id || !neutralised.has(w.id)) return w;
-    // BUG-022 — `w.keyforms[0]` is the FIRST keyform from the cartesian
-    // product, not the REST keyform. For a hair warp bound to
-    // `[ParamHairFront, keys: [-1, 0, 1]]`, perPartRigWarps emits keyforms
-    // in order `keyTuple=[-1] / [0] / [1]` — `keyforms[0]` is the
-    // swung-left grid. Picking it as the rest left disabled-subsystem
-    // hair permanently tilted (15.5 px on shelby's front-hair / 12.2 px
-    // on back-hair, per `rigInitIdentityDiag`).
-    //
-    // Pick the keyform whose keyTuple is all-zero (= rest of every
-    // binding axis). Fall back to `keyforms[0]` for warps with non-
-    // standard binding shapes (e.g. the `ParamOpacity[1.0]` no-op
-    // single-keyform path) where no all-zero tuple exists.
-    const kfs = Array.isArray(w.keyforms) ? w.keyforms : [];
-    const restKf = kfs.find((k) =>
-      Array.isArray(k?.keyTuple) && k.keyTuple.length > 0
-        && k.keyTuple.every((v) => v === 0)
-    ) ?? kfs[0] ?? null;
-    return {
-      ...w,
-      bindings: [],
-      keyforms: restKf ? [restKf] : [],
-    };
-  });
-
-  return {
-    rigSpec: { ...rigSpec, warpDeformers: newWarps },
-    neutralisedWarpIds: [...neutralised],
-  };
 }
 
 /**
@@ -562,6 +504,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
       faceParallaxSpec: null,
       bodyWarpChain: null,
       rigWarps: new Map(),
+      disabledTargetPartIds: new Set(),
       rigSpec,
       droppedParamIds: pruned.droppedParamIds,
       debug: { source: 'authored-cmo3', ...debug, droppedOrphanRotations: pruned.droppedRotationIds, droppedOrphanParams: pruned.droppedParamIds },
@@ -611,18 +554,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   }));
 
   const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
-  const { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps } = harvestSeedFromRigSpec(
-    result.rigSpec,
-    { subsystems, nodes: project.nodes ?? [] },
-  );
-
-  // PP1-002 — neutralise disabled-subsystem rigWarps in the live rigSpec
-  // so chainEval evaluates them as pass-throughs. Without this,
-  // `project.rigWarps` storage is filtered (export-time) but
-  // `rigSpec.warpDeformers` still contains hair/clothing/eye warps that
-  // get evaluated every frame, producing the visible "hair still sways"
-  // symptom even when hairRig=false.
-  const { rigSpec: filteredRigSpec, neutralisedWarpIds } = applySubsystemOptOutToRigSpec(
+  const { faceParallaxSpec, bodyWarpChain, neckWarpSpec, rigWarps, disabledTargetPartIds } = harvestSeedFromRigSpec(
     result.rigSpec,
     { subsystems, nodes: project.nodes ?? [] },
   );
@@ -631,7 +563,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // `Rotation_bothLegs`, etc. — see `pruneOrphanRotationDeformers`
   // doc) so their `ParamRotation_<g>` sliders disappear from the
   // Parameters panel instead of sitting dead.
-  const pruned = pruneOrphanRotationDeformers(filteredRigSpec);
+  const pruned = pruneOrphanRotationDeformers(result.rigSpec);
 
   const rs = pruned.rigSpec;
   // GAP-008 — log which subsystems are off so the user sees in the Logs
@@ -647,7 +579,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     bodyWarpChain: bodyWarpChain ? 'present' : 'missing',
     rigWarpsByPartId: rigWarps?.size ?? 0,
     disabledSubsystems: disabled.length > 0 ? disabled : undefined,
-    optOutWarpsNeutralisedInRigSpec: neutralisedWarpIds.length || undefined,
+    rigWarpsSeededDisabled: disabledTargetPartIds.size || undefined,
     droppedOrphanRotations: pruned.droppedRotationIds.length || undefined,
     droppedOrphanRotationIds: pruned.droppedRotationIds.length > 0 ? pruned.droppedRotationIds : undefined,
     droppedOrphanParams: pruned.droppedParamIds.length || undefined,
@@ -672,6 +604,7 @@ export async function initializeRigFromProject(project, images = new Map()) {
     bodyWarpChain,
     neckWarpSpec,
     rigWarps,
+    disabledTargetPartIds,
     rigSpec: pruned.rigSpec ?? null,
     droppedParamIds: pruned.droppedParamIds,
     debug: result.rigDebugLog ?? null,

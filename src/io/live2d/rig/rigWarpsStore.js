@@ -235,12 +235,35 @@ export function resolveRigWarps(project) {
  * pass (e.g., calling `generateCmo3` once and filtering
  * `rigSpec.warpDeformers` to entries with `targetPartId`).
  *
+ * **Subsystem opt-out (2026-06-08).** `opts.disabledTargetPartIds` lists
+ * partIds whose owning Init-Rig subsystem (`hairRig`, `clothingRig`,
+ * `eyeRig`, `mouthRig`) is flagged false. Their rigWarp spec is still
+ * upserted (so `synthesizeModifierStacks` produces a non-empty stack and
+ * the part renders at its authored position), but the leaf modifier
+ * `enabled` flag is forced to `false` — the renderer's per-modifier gate
+ * (`isModifierEnabled`) routes through the rest-grid pass-through, no
+ * sway. This is Blender's `BKE_modifier_is_enabled` semantic — the
+ * disable is a per-modifier toggle, not a "drop the modifier" strip.
+ * Pre-revision (GAP-008) the harvest stripped these from the map; that
+ * left `part.modifiers[]` empty → renderer placed the part at canvas
+ * origin (`rigInvariantCheck` I-1/I-21).
+ *
+ * Override semantic: subsystem opt-out at Init Rig time WINS over any
+ * `priorEnabled` carry-forward — re-clicking Init Rig with a subsystem
+ * still off resets the modifier to disabled, even if the user manually
+ * toggled it on via the UI between Init Rigs. To re-enable, toggle the
+ * subsystem on in the popover and re-Init.
+ *
  * @param {object} project - mutated
  * @param {Map<string,object>|Iterable<object>} rigWarps
  * @param {'replace'|'merge'} [mode='replace']
+ * @param {{ disabledTargetPartIds?: Set<string>|null }} [opts]
  * @returns {Record<string, StoredRigWarpSpec>} the serialized form written
  */
-export function seedRigWarps(project, rigWarps, mode = 'replace') {
+export function seedRigWarps(project, rigWarps, mode = 'replace', opts = {}) {
+  const disabledTargetPartIds = opts?.disabledTargetPartIds instanceof Set
+    ? opts.disabledTargetPartIds
+    : null;
   let specs;
   if (rigWarps instanceof Map) {
     specs = Array.from(rigWarps.values());
@@ -315,10 +338,14 @@ export function seedRigWarps(project, rigWarps, mode = 'replace') {
           if (typeof prior.showInEditor === 'boolean') priorShowInEditor = prior.showInEditor;
         }
       }
+      // Subsystem opt-out (2026-06-08): if this part's owning subsystem
+      // is flagged off, force-disable the modifier — overrides any
+      // priorEnabled. See seedRigWarps doc-comment for the why.
+      const forceDisabled = disabledTargetPartIds?.has(partId) === true;
       const leafEntry = {
         type: 'lattice',
         objectId: spec.id,
-        enabled: priorEnabled,
+        enabled: forceDisabled ? false : priorEnabled,
         mode: priorMode,
         showInEditor: priorShowInEditor,
       };

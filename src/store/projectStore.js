@@ -1678,7 +1678,9 @@ export const useProjectStore = create((set, get) => {
         seeds.clearBodyWarp(proj);
       }
       if (harvest?.rigWarps && harvest.rigWarps.size > 0) {
-        seeds.seedRigWarps(proj, harvest.rigWarps, mode);
+        seeds.seedRigWarps(proj, harvest.rigWarps, mode, {
+          disabledTargetPartIds: harvest.disabledTargetPartIds ?? null,
+        });
       } else if (mode === 'replace') {
         seeds.clearRigWarps(proj);
       }

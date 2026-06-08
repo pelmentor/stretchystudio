@@ -1,18 +1,19 @@
-// GAP-008 — per-subsystem opt-out unit tests.
+// Per-subsystem opt-out unit tests.
 //
 // Verifies:
 //   - autoRigConfig.subsystems schema + defaults (all true)
 //   - resolveAutoRigConfig spread-merges partial subsystem configs
-//   - harvestSeedFromRigSpec drops outputs by subsystem flag:
-//       * faceRig=false → faceParallaxSpec=null
+//   - harvestSeedFromRigSpec semantics (REVISED 2026-06-08):
+//       * faceRig=false → faceParallaxSpec=null, neckWarpSpec=null
 //       * bodyWarps=false → bodyWarpChain=null
-//       * hairRig=false → hair-tagged rigWarps dropped
-//       * clothingRig=false → clothing-tagged rigWarps dropped
-//       * eyeRig=false → eye-tagged rigWarps dropped
-//       * mouthRig=false → mouth-tagged rigWarps dropped
-//   - seedPhysicsRules drops rules by subsystem prefix
-//   - subsystems survives save/load round-trip (already covered by
-//     test:projectRoundTrip via autoRigConfig — sanity check here)
+//       * hairRig/clothingRig/eyeRig/mouthRig=false → matching rigWarps
+//         STAY in the map but their partIds land in disabledTargetPartIds.
+//         (Pre-2026-06-08 the harvest STRIPPED them — empty modifiers[]
+//         caused I-1/I-21 "part renders at canvas origin" violations.)
+//   - filterPhysicsRulesBySubsystems drops rules by name-prefix
+//   - seedPhysicsRules respects subsystem flags
+//   - seedRigWarps writes leaf modifier with enabled:false for partIds
+//     in the disabledTargetPartIds Set (Blender modifier-toggle parity)
 //
 // Run: node scripts/test/test_subsystemsOptOut.mjs
 
@@ -23,9 +24,9 @@ import {
 import {
   harvestSeedFromRigSpec,
   filterPhysicsRulesBySubsystems,
-  applySubsystemOptOutToRigSpec,
 } from '../../src/io/live2d/rig/initRig.js';
 import { seedPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
+import { seedRigWarps } from '../../src/io/live2d/rig/rigWarpsStore.js';
 
 let passed = 0;
 let failed = 0;
@@ -36,6 +37,33 @@ function assert(cond, name) {
   failed++;
   failures.push(name);
   console.error(`FAIL: ${name}`);
+}
+
+// Build a rigWarp spec that passes the serializer's mandatory-field
+// gauntlet (parent, canvasBbox, gridSize, baseGrid, localFrame, bindings,
+// keyforms, isVisible/Locked/QuadTransform). Tests only care about the
+// id + targetPartId + enabled-flag round-trip; other fields are stubbed
+// with plausible identity values.
+function mkWarpSpec({ id, targetPartId, parent = { type: 'warp', id: 'BodyXWarp' } } = {}) {
+  return {
+    id,
+    name: id,
+    parent,
+    targetPartId,
+    canvasBbox: { minX: 0, minY: 0, W: 100, H: 100 },
+    gridSize: { rows: 2, cols: 2 },
+    baseGrid: new Float64Array([0, 0, 1, 0, 0, 1, 1, 1]),
+    localFrame: 'normalized-0to1',
+    bindings: [],
+    keyforms: [{
+      keyTuple: [0],
+      positions: new Float64Array([0, 0, 1, 0, 0, 1, 1, 1]),
+      opacity: 1,
+    }],
+    isVisible: true,
+    isLocked: false,
+    isQuadTransform: false,
+  };
 }
 
 // ── Default config: all subsystems enabled ─────────────────────────
@@ -57,7 +85,7 @@ function assert(cond, name) {
 
   const project = {
     autoRigConfig: {
-      subsystems: { hairRig: false },   // only one flag set; others should default
+      subsystems: { hairRig: false },
     },
   };
   const cfg2 = resolveAutoRigConfig(project);
@@ -76,11 +104,11 @@ function assert(cond, name) {
     ],
     bodyWarpChain: { specs: [] },
   };
-  // Default: faceRig=true → spec retained
   const r1 = harvestSeedFromRigSpec(rigSpec);
   assert(r1.faceParallaxSpec !== null, 'default: faceParallaxSpec retained');
+  assert(r1.disabledTargetPartIds instanceof Set, 'default: disabledTargetPartIds is a Set');
+  assert(r1.disabledTargetPartIds.size === 0, 'default: disabledTargetPartIds is empty');
 
-  // faceRig=false → spec dropped
   const r2 = harvestSeedFromRigSpec(rigSpec, { subsystems: { faceRig: false } });
   assert(r2.faceParallaxSpec === null, 'faceRig=false → faceParallaxSpec dropped');
   assert(r2.bodyWarpChain !== null, 'faceRig=false → bodyWarpChain still present');
@@ -97,7 +125,7 @@ function assert(cond, name) {
   assert(r.faceParallaxSpec !== null, 'bodyWarps=false → face still present');
 }
 
-// ── harvestSeedFromRigSpec: hairRig opt-out (tag-based) ────────────
+// ── harvestSeedFromRigSpec: hairRig opt-out keeps in map, flags in Set ─
 {
   const nodes = [
     { id: 'p-front-hair', name: 'front hair' },
@@ -118,17 +146,31 @@ function assert(cond, name) {
     ],
   };
 
-  // hairRig off → both hair-tagged warps dropped
   const r = harvestSeedFromRigSpec(rigSpec, {
     subsystems: { hairRig: false },
     nodes,
   });
-  assert(!r.rigWarps.has('p-front-hair'), 'hairRig=false drops front-hair rigWarp');
-  assert(!r.rigWarps.has('p-back-hair'), 'hairRig=false drops back-hair rigWarp');
+  // All warps remain in the map — the modifier MUST be present so the
+  // depgraph chain walk finds it. The disable is via the modifier's
+  // enabled flag, not by stripping the modifier.
+  assert(r.rigWarps.has('p-front-hair'), 'hairRig=false KEEPS front-hair rigWarp in map');
+  assert(r.rigWarps.has('p-back-hair'), 'hairRig=false KEEPS back-hair rigWarp in map');
   assert(r.rigWarps.has('p-shirt'), 'hairRig=false keeps clothing rigWarp');
   assert(r.rigWarps.has('p-eyebrow'), 'hairRig=false keeps eye rigWarp');
   assert(r.rigWarps.has('p-mouth'), 'hairRig=false keeps mouth rigWarp');
   assert(r.rigWarps.has('p-unknown'), 'hairRig=false keeps unknown-tag rigWarp');
+
+  // Hair-tagged partIds land in disabled Set; others do not.
+  assert(r.disabledTargetPartIds.has('p-front-hair'),
+    'hairRig=false marks front-hair as disabled');
+  assert(r.disabledTargetPartIds.has('p-back-hair'),
+    'hairRig=false marks back-hair as disabled');
+  assert(!r.disabledTargetPartIds.has('p-shirt'),
+    'hairRig=false does NOT mark clothing as disabled');
+  assert(!r.disabledTargetPartIds.has('p-eyebrow'),
+    'hairRig=false does NOT mark eye as disabled');
+  assert(!r.disabledTargetPartIds.has('p-unknown'),
+    'hairRig=false does NOT mark unknown-tag as disabled');
 }
 
 // ── harvestSeedFromRigSpec: clothingRig opt-out ────────────────────
@@ -151,10 +193,16 @@ function assert(cond, name) {
     subsystems: { clothingRig: false },
     nodes,
   });
-  assert(!r.rigWarps.has('p-shirt'), 'clothingRig=false drops topwear');
-  assert(!r.rigWarps.has('p-skirt'), 'clothingRig=false drops bottomwear');
-  assert(!r.rigWarps.has('p-pants'), 'clothingRig=false drops legwear');
-  assert(r.rigWarps.has('p-front-hair'), 'clothingRig=false keeps hair');
+  // Keep all in map, flag clothing partIds in Set
+  assert(r.rigWarps.has('p-shirt'), 'clothingRig=false keeps topwear in map');
+  assert(r.rigWarps.has('p-skirt'), 'clothingRig=false keeps bottomwear in map');
+  assert(r.rigWarps.has('p-pants'), 'clothingRig=false keeps legwear in map');
+  assert(r.rigWarps.has('p-front-hair'), 'clothingRig=false keeps hair in map');
+  assert(r.disabledTargetPartIds.has('p-shirt'), 'clothingRig=false marks topwear disabled');
+  assert(r.disabledTargetPartIds.has('p-skirt'), 'clothingRig=false marks bottomwear disabled');
+  assert(r.disabledTargetPartIds.has('p-pants'), 'clothingRig=false marks legwear disabled');
+  assert(!r.disabledTargetPartIds.has('p-front-hair'),
+    'clothingRig=false does NOT mark hair disabled');
 }
 
 // ── harvestSeedFromRigSpec: eyeRig opt-out ─────────────────────────
@@ -179,11 +227,12 @@ function assert(cond, name) {
     subsystems: { eyeRig: false },
     nodes,
   });
-  assert(!r.rigWarps.has('p-eyewhite-l'), 'eyeRig=false drops eyewhite');
-  assert(!r.rigWarps.has('p-iris-r'), 'eyeRig=false drops irides');
-  assert(!r.rigWarps.has('p-lash-l'), 'eyeRig=false drops eyelash');
-  assert(!r.rigWarps.has('p-brow-l'), 'eyeRig=false drops eyebrow');
-  assert(r.rigWarps.has('p-mouth'), 'eyeRig=false keeps mouth');
+  assert(r.rigWarps.size === 5, 'eyeRig=false keeps all 5 rigWarps in map');
+  assert(r.disabledTargetPartIds.has('p-eyewhite-l'), 'eyeRig=false marks eyewhite disabled');
+  assert(r.disabledTargetPartIds.has('p-iris-r'), 'eyeRig=false marks irides disabled');
+  assert(r.disabledTargetPartIds.has('p-lash-l'), 'eyeRig=false marks eyelash disabled');
+  assert(r.disabledTargetPartIds.has('p-brow-l'), 'eyeRig=false marks eyebrow disabled');
+  assert(!r.disabledTargetPartIds.has('p-mouth'), 'eyeRig=false does NOT mark mouth disabled');
 }
 
 // ── harvestSeedFromRigSpec: combined opt-outs ──────────────────────
@@ -211,11 +260,15 @@ function assert(cond, name) {
     },
     nodes,
   });
-  assert(r.faceParallaxSpec === null, 'combined: faceRig off');
-  assert(r.bodyWarpChain === null, 'combined: bodyWarps off');
-  assert(!r.rigWarps.has('p-hair'), 'combined: hair off');
-  assert(!r.rigWarps.has('p-shirt'), 'combined: clothing off');
-  assert(r.rigWarps.has('p-mouth'), 'combined: mouth still on');
+  assert(r.faceParallaxSpec === null, 'combined: faceRig off → no faceParallax');
+  assert(r.bodyWarpChain === null, 'combined: bodyWarps off → no body chain');
+  assert(r.rigWarps.size === 3, 'combined: all 3 per-part warps remain in map');
+  assert(r.disabledTargetPartIds.has('p-hair'),
+    'combined: hair flagged disabled');
+  assert(r.disabledTargetPartIds.has('p-shirt'),
+    'combined: clothing flagged disabled');
+  assert(!r.disabledTargetPartIds.has('p-mouth'),
+    'combined: mouth NOT flagged (mouthRig still on)');
 }
 
 // ── filterPhysicsRulesBySubsystems ─────────────────────────────────
@@ -229,24 +282,19 @@ function assert(cond, name) {
     { name: 'unknown-rule' },
   ];
 
-  // hairRig off
   const f1 = filterPhysicsRulesBySubsystems(rules, { hairRig: false });
   assert(f1.length === 4, 'hairRig=false drops 2 hair rules');
   assert(!f1.some(r => r.name.startsWith('hair-')), 'hairRig=false drops all hair-* rules');
 
-  // clothingRig off
   const f2 = filterPhysicsRulesBySubsystems(rules, { clothingRig: false });
   assert(!f2.some(r => r.name === 'clothing-skirt'), 'clothingRig=false drops clothing rule');
 
-  // armPhysics off
   const f3 = filterPhysicsRulesBySubsystems(rules, { armPhysics: false });
   assert(!f3.some(r => r.name.includes('elbow')), 'armPhysics=false drops elbow rule');
 
-  // bodyWarps off → drops breath
   const f4 = filterPhysicsRulesBySubsystems(rules, { bodyWarps: false });
   assert(!f4.some(r => r.name === 'breath'), 'bodyWarps=false drops breath');
 
-  // unknown rule always passes through
   const f5 = filterPhysicsRulesBySubsystems(rules, {
     hairRig: false, clothingRig: false, armPhysics: false, bodyWarps: false,
   });
@@ -255,7 +303,6 @@ function assert(cond, name) {
 
 // ── seedPhysicsRules respects subsystems ───────────────────────────
 {
-  // Smoke: a project with hairRig disabled should seed without hair rules.
   const project = {
     nodes: [{ id: 'g-hair-front', name: 'front hair', type: 'group' }],
     autoRigConfig: { subsystems: { hairRig: false } },
@@ -271,154 +318,122 @@ function assert(cond, name) {
     warpDeformers: [{ id: 'FaceParallaxWarp' }, { id: 'RigWarp_a', targetPartId: 'p-x' }],
     bodyWarpChain: { specs: [] },
   };
-  // No opts at all → matches pre-GAP-008 behaviour.
   const r = harvestSeedFromRigSpec(rigSpec);
   assert(r.faceParallaxSpec !== null, 'no opts: face retained');
   assert(r.bodyWarpChain !== null, 'no opts: body retained');
   assert(r.rigWarps.has('p-x'), 'no opts: rigWarp retained');
+  assert(r.disabledTargetPartIds.size === 0, 'no opts: nothing flagged disabled');
 }
 
-// ── PP1-002 — applySubsystemOptOutToRigSpec neutralises disabled rigWarps
-//             (single rest keyform, empty bindings → pass-through). The
-//             art mesh's parent is preserved so verts stay in their
-//             correct frame; the warp evaluates to identity. ───────
+// ── seedRigWarps: enabled:false for partIds in disabledTargetPartIds ─
+// End-to-end: simulate the seedAllRig wiring — opt-out hair, verify the
+// hair part's modifiers[0] lands with enabled:false. This is the BUG-fix:
+// pre-2026-06-08 the harvest stripped the warp from the map, leaving
+// modifiers[] empty → I-1/I-21 "renders at canvas origin". Now the
+// modifier is present with enabled:false, renderer routes to rest-grid
+// pass-through, part stays visible at authored position.
 {
-  const nodes = [
-    { id: 'p-front-hair', name: 'front hair' },
-    { id: 'p-back-hair',  name: 'back hair' },
-    { id: 'p-face',       name: 'face' },
-  ];
-  const rigSpec = {
-    warpDeformers: [
-      { id: 'FaceParallaxWarp', parent: { type: 'root', id: null },
-        bindings: [{ parameterId: 'ParamAngleX', keys: [-30, 0, 30] }],
-        keyforms: [{}, {}, {}] },
-      { id: 'RigWarp_FH', targetPartId: 'p-front-hair', parent: { type: 'warp', id: 'FaceParallaxWarp' },
-        bindings: [{ parameterId: 'ParamBodyAngleX', keys: [-10, 0, 10] }],
-        keyforms: [{ id: 'rest' }, { id: 'left' }, { id: 'right' }] },
-      { id: 'RigWarp_BH', targetPartId: 'p-back-hair',  parent: { type: 'root', id: null },
-        bindings: [{ parameterId: 'ParamBodyAngleZ', keys: [-10, 0, 10] }],
-        keyforms: [{ id: 'rest' }, { id: 'cw' }, { id: 'ccw' }] },
-    ],
-    rotationDeformers: [],
-    artMeshes: [
-      { id: 'p-front-hair', parent: { type: 'warp', id: 'RigWarp_FH' } },
-      { id: 'p-back-hair',  parent: { type: 'warp', id: 'RigWarp_BH' } },
-      { id: 'p-face',       parent: { type: 'warp', id: 'FaceParallaxWarp' } },
+  const project = {
+    nodes: [
+      { id: 'p-front-hair', name: 'front hair', type: 'part' },
+      { id: 'p-shirt',       name: 'topwear',     type: 'part' },
     ],
   };
+  // Two warps — one for hair (opted out), one for clothing (kept).
+  const rigWarps = new Map([
+    ['p-front-hair', mkWarpSpec({ id: 'RigWarp_front_hair', targetPartId: 'p-front-hair' })],
+    ['p-shirt',      mkWarpSpec({ id: 'RigWarp_shirt',      targetPartId: 'p-shirt'      })],
+  ]);
 
-  const r = applySubsystemOptOutToRigSpec(rigSpec, {
-    subsystems: { hairRig: false },
-    nodes,
+  seedRigWarps(project, rigWarps, 'replace', {
+    disabledTargetPartIds: new Set(['p-front-hair']),
   });
-  assert(r.neutralisedWarpIds.length === 2, 'PP1-002 hairRig=false neutralises 2 warps');
-  assert(r.rigSpec.warpDeformers.length === 3, 'PP1-002 warp count unchanged (count not drop)');
 
-  const fhWarp = r.rigSpec.warpDeformers.find(w => w.id === 'RigWarp_FH');
-  assert(fhWarp.bindings.length === 0, 'PP1-002 hair warp bindings cleared');
-  assert(fhWarp.keyforms.length === 1, 'PP1-002 hair warp reduced to 1 rest keyform');
-  assert(fhWarp.keyforms[0].id === 'rest', 'PP1-002 retained keyform IS the rest one (index 0)');
-  assert(fhWarp.parent.id === 'FaceParallaxWarp',
-    'PP1-002 hair warp parent untouched (frame stays consistent)');
+  const fh = project.nodes.find(n => n.id === 'p-front-hair');
+  const sh = project.nodes.find(n => n.id === 'p-shirt');
 
-  const bhWarp = r.rigSpec.warpDeformers.find(w => w.id === 'RigWarp_BH');
-  assert(bhWarp.bindings.length === 0, 'PP1-002 back-hair warp bindings cleared');
-  assert(bhWarp.keyforms.length === 1 && bhWarp.keyforms[0].id === 'rest',
-    'PP1-002 back-hair warp reduced to rest');
+  assert(Array.isArray(fh.modifiers) && fh.modifiers.length > 0,
+    'opt-out: hair part HAS modifiers[] (not stripped, no empty-modifier I-1/I-21)');
+  assert(fh.modifiers[0].type === 'lattice',
+    'opt-out: hair part modifiers[0] is the lattice leaf');
+  assert(fh.modifiers[0].objectId === 'RigWarp_front_hair',
+    'opt-out: hair leaf points at the seeded warp');
+  assert(fh.modifiers[0].enabled === false,
+    'opt-out: hair part modifier.enabled === false (sway disabled)');
 
-  // Face's warp untouched.
-  const faceParallax = r.rigSpec.warpDeformers.find(w => w.id === 'FaceParallaxWarp');
-  assert(faceParallax.bindings.length === 1 && faceParallax.keyforms.length === 3,
-    'PP1-002 FaceParallax warp untouched (faceRig still on)');
-
-  // Art mesh parents stay put — verts remain in the correct (still-existing) parent frame.
-  const fh = r.rigSpec.artMeshes.find(m => m.id === 'p-front-hair');
-  assert(fh.parent.id === 'RigWarp_FH', 'PP1-002 front-hair parent untouched');
-  const bh = r.rigSpec.artMeshes.find(m => m.id === 'p-back-hair');
-  assert(bh.parent.id === 'RigWarp_BH', 'PP1-002 back-hair parent untouched');
-  const face = r.rigSpec.artMeshes.find(m => m.id === 'p-face');
-  assert(face.parent.id === 'FaceParallaxWarp', 'PP1-002 face parent untouched');
+  assert(Array.isArray(sh.modifiers) && sh.modifiers.length > 0,
+    'on: clothing part HAS modifiers[]');
+  assert(sh.modifiers[0].enabled === true,
+    'on: clothing part modifier.enabled === true (not in disabled Set)');
 }
 
-// ── PP1-002 — no opts / null subsystems → identity ─────────────────
+// ── seedRigWarps: re-Init Rig with subsystem STILL opted out
+// resets enabled to false even if user had manually toggled it on
+// between Init Rigs. Subsystem opt-out at Init Rig time WINS over
+// priorEnabled carry-forward.
 {
-  const rigSpec = {
-    warpDeformers: [{ id: 'X', targetPartId: 'p-x' }],
-    artMeshes: [{ id: 'p-x', parent: { type: 'warp', id: 'X' } }],
+  const project = {
+    nodes: [
+      {
+        id: 'p-front-hair', name: 'front hair', type: 'part',
+        modifiers: [{
+          type: 'lattice', objectId: 'RigWarp_front_hair',
+          enabled: true,        // user manually re-enabled between Init Rigs
+          mode: 7, showInEditor: true,
+        }],
+      },
+    ],
   };
-  const r1 = applySubsystemOptOutToRigSpec(rigSpec, {});
-  assert(r1.rigSpec === rigSpec, 'PP1-002 no opts → identity');
-  assert(r1.neutralisedWarpIds.length === 0, 'PP1-002 no opts → 0 neutralised');
-
-  const r2 = applySubsystemOptOutToRigSpec(rigSpec, { subsystems: null, nodes: [] });
-  assert(r2.rigSpec === rigSpec, 'PP1-002 null subsystems → identity');
-}
-
-// ── PP1-002 — disabled subsystem with no matching tags → no neutralise ─
-{
-  const nodes = [{ id: 'p-x', name: 'face' }];
-  const rigSpec = {
-    warpDeformers: [{ id: 'X', targetPartId: 'p-x', bindings: [], keyforms: [{}] }],
-    artMeshes: [{ id: 'p-x', parent: { type: 'warp', id: 'X' } }],
-  };
-  const r = applySubsystemOptOutToRigSpec(rigSpec, {
-    subsystems: { hairRig: false },
-    nodes,
+  const rigWarps = new Map([
+    ['p-front-hair', mkWarpSpec({ id: 'RigWarp_front_hair', targetPartId: 'p-front-hair' })],
+  ]);
+  seedRigWarps(project, rigWarps, 'replace', {
+    disabledTargetPartIds: new Set(['p-front-hair']),
   });
-  assert(r.neutralisedWarpIds.length === 0,
-    'PP1-002 hairRig=false but no hair-tagged parts → 0 neutralised');
+  const fh = project.nodes.find(n => n.id === 'p-front-hair');
+  assert(fh.modifiers[0].enabled === false,
+    're-Init with subsystem still off: enabled reset to false (overrides priorEnabled:true)');
 }
 
-// ── BUG-022 — neutralisation picks the all-zero keyTuple as REST,
-//            not blindly keyforms[0]. The cartesian-product order in
-//            perPartRigWarps emits keyTuple=[-1] first for a binding
-//            with keys=[-1, 0, 1], so keyforms[0] is the swung-left
-//            grid. Picking it as rest leaves disabled-subsystem hair
-//            permanently tilted (15.5 px on shelby's front-hair). ──
+// ── seedRigWarps: subsystem ENABLED preserves user's prior disable
+// (priorEnabled carry-forward intact for non-opted-out parts).
 {
-  const nodes = [{ id: 'p-fh', name: 'front hair' }];
-  const rigSpec = {
-    warpDeformers: [{
-      id: 'RigWarp_FH', targetPartId: 'p-fh',
-      bindings: [{ parameterId: 'ParamHairFront', keys: [-1, 0, 1], interpolation: 'LINEAR' }],
-      keyforms: [
-        // keyTuple [-1] — swung-LEFT grid (NOT rest)
-        { keyTuple: [-1], positions: [10, 0, 11, 0, 10, 1, 11, 1], opacity: 1 },
-        // keyTuple [0] — REST (canvas-aligned)
-        { keyTuple: [0],  positions: [0, 0, 1, 0, 0, 1, 1, 1], opacity: 1 },
-        // keyTuple [1] — swung-RIGHT grid
-        { keyTuple: [1],  positions: [-10, 0, -9, 0, -10, 1, -9, 1], opacity: 1 },
-      ],
-    }],
-    artMeshes: [{ id: 'p-fh', parent: { type: 'warp', id: 'RigWarp_FH' } }],
+  const project = {
+    nodes: [
+      {
+        id: 'p-shirt', name: 'topwear', type: 'part',
+        modifiers: [{
+          type: 'lattice', objectId: 'RigWarp_shirt',
+          enabled: false,       // user manually disabled this one
+          mode: 7, showInEditor: true,
+        }],
+      },
+    ],
   };
-
-  const r = applySubsystemOptOutToRigSpec(rigSpec, { subsystems: { hairRig: false }, nodes });
-  const w = r.rigSpec.warpDeformers[0];
-  assert(w.bindings.length === 0, 'BUG-022 bindings cleared');
-  assert(w.keyforms.length === 1, 'BUG-022 reduced to single keyform');
-  assert(JSON.stringify(w.keyforms[0].keyTuple) === '[0]',
-    'BUG-022 surviving keyform is keyTuple=[0] (REST), not keyforms[0]=[-1] (swung)');
-  assert(w.keyforms[0].positions[0] === 0,
-    'BUG-022 surviving keyform positions are the rest grid (not the +10-shifted swung-left grid)');
-}
-
-// ── PP1-002 — warp with no keyforms → keyforms stays empty array ─
-{
-  const nodes = [{ id: 'p-h', name: 'front hair' }];
-  const rigSpec = {
-    warpDeformers: [{ id: 'X', targetPartId: 'p-h', bindings: [{ parameterId: 'ParamA', keys: [0, 1] }], keyforms: [] }],
-    artMeshes: [{ id: 'p-h', parent: { type: 'warp', id: 'X' } }],
-  };
-  const r = applySubsystemOptOutToRigSpec(rigSpec, {
-    subsystems: { hairRig: false },
-    nodes,
+  const rigWarps = new Map([
+    ['p-shirt', mkWarpSpec({ id: 'RigWarp_shirt', targetPartId: 'p-shirt' })],
+  ]);
+  // clothingRig is ON; shirt is NOT in disabled set.
+  seedRigWarps(project, rigWarps, 'replace', {
+    disabledTargetPartIds: new Set(),
   });
-  assert(r.neutralisedWarpIds.length === 1, 'PP1-002 empty-keyforms warp still neutralised');
-  const w = r.rigSpec.warpDeformers[0];
-  assert(w.bindings.length === 0 && w.keyforms.length === 0,
-    'PP1-002 empty-keyforms input → empty output, no crash');
+  const sh = project.nodes.find(n => n.id === 'p-shirt');
+  assert(sh.modifiers[0].enabled === false,
+    'subsystem on + user manually disabled: priorEnabled:false survives Init Rig');
+}
+
+// ── seedRigWarps: no disabled set → all enabled (back-compat default) ─
+{
+  const project = {
+    nodes: [{ id: 'p-x', name: 'face', type: 'part' }],
+  };
+  const rigWarps = new Map([
+    ['p-x', mkWarpSpec({ id: 'RigWarp_x', targetPartId: 'p-x' })],
+  ]);
+  seedRigWarps(project, rigWarps, 'replace');
+  const x = project.nodes.find(n => n.id === 'p-x');
+  assert(x.modifiers[0].enabled === true,
+    'no opts: defaults to enabled:true (back-compat)');
 }
 
 console.log(`subsystemsOptOut: ${passed} passed, ${failed} failed`);
