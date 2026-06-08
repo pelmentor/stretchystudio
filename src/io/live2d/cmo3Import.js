@@ -301,9 +301,7 @@ export async function importCmo3(bytes) {
     textures,
     nodes,
     parameters,
-    physics_groups: [],
     maskConfigs,
-    physicsRules: [],
     boneConfig: detectedBakedAngles
       ? { bakedKeyformAngles: detectedBakedAngles }
       : null,

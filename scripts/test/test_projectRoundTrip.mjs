@@ -46,7 +46,28 @@ function makeFixtureProject() {
     textures: [],
     nodes: [
       { id: 'g1', type: 'group', name: 'root', parent: null, opacity: 1, visible: true,
-        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 } },
+        transform: { x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, pivotX: 0, pivotY: 0 },
+        // v50 (2026-06-08): physics rules live as per-node physicsModifier.
+        // Pin a sample modifier here so the round-trip test exercises both
+        // save (projectFile.js serialises node.modifiers) and load
+        // (migrations + deserialise).
+        modifiers: [{
+          type: 'physicsModifier',
+          ruleId: 'PSTest1',
+          name: 'hair-front',
+          category: 'hair',
+          inputs: [{ paramId: 'ParamBodyAngleZ', type: 'SRC_TO_G_ANGLE', weight: 100 }],
+          vertices: [
+            { x: 0, y: 0, mobility: 1, delay: 1, acceleration: 1, radius: 0 },
+            { x: 0, y: 5, mobility: 1, delay: 1, acceleration: 1, radius: 5 },
+          ],
+          normalization: { posMin: -10, posMax: 10, posDef: 0, angleMin: -10, angleMax: 10, angleDef: 0 },
+          output: { paramId: 'ParamHairFront', vertexIndex: 1, scale: 1, isReverse: false },
+          enabled: true,
+          mode: 7,
+          showInEditor: true,
+        }],
+      },
       // BFA-006 Phase 6 — deformer nodes live here, replacing the
       // legacy faceParallax / bodyWarp / rigWarps sidetables.
       {
@@ -96,9 +117,8 @@ function makeFixtureProject() {
       { id: 'ParamBodyAngleX', name: 'BodyAngleX', min: -10, max: 10, default: 0, tag: null },
       { id: 'ParamBreath',     name: 'Breath',     min: 0,   max: 1,  default: 0, tag: null },
     ],
-    physics_groups: [],
     maskConfigs: [{ targetId: 'irides-l', clipperId: 'eyewhite-l' }],
-    physicsRules: [{ name: 'hair-front', requireTag: 'front hair', outputs: ['hair-front-1'] }],
+    // physics modifier lives on the root group above (v50, 2026-06-08).
     boneConfig: { bakedKeyformAngles: [-90, -45, 0, 45, 90] },
     variantFadeRules: { backdropTags: ['face', 'ears', 'front hair', 'back hair'] },
     eyeClosureConfig: {
@@ -170,7 +190,15 @@ async function saveAndReload(project) {
   assert(deepEqual(reloaded.canvas, original.canvas), 'canvas survives round-trip');
   assert(deepEqual(reloaded.parameters, original.parameters), 'parameters survives');
   assert(deepEqual(reloaded.maskConfigs, original.maskConfigs), 'maskConfigs survives');
-  assert(deepEqual(reloaded.physicsRules, original.physicsRules), 'physicsRules survives');
+  // v50: physicsRules retired; migration moved the fixture rule onto
+  // root group 'g1' as a physicsModifier. Assert it survives round-trip.
+  assert(reloaded.physicsRules === undefined, 'physicsRules field retired (v50)');
+  const rootG = (reloaded.nodes ?? []).find((n) => n.id === 'g1');
+  const physMod = (rootG?.modifiers ?? []).find((m) =>
+    m && m.type === 'physicsModifier' && m.ruleId === 'PSTest1');
+  assert(physMod != null, 'physicsModifier migrated onto root group, survives round-trip');
+  assert(physMod?.output?.paramId === 'ParamHairFront',
+    'physicsModifier output paramId preserved');
   assert(deepEqual(reloaded.boneConfig, original.boneConfig), 'boneConfig survives');
   assert(deepEqual(reloaded.variantFadeRules, original.variantFadeRules), 'variantFadeRules survives');
   assert(deepEqual(reloaded.eyeClosureConfig, original.eyeClosureConfig), 'eyeClosureConfig survives');

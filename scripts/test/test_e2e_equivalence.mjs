@@ -10,7 +10,11 @@
 
 import { buildParameterSpec, seedParameters } from '../../src/io/live2d/rig/paramSpec.js';
 import { resolveMaskConfigs, seedMaskConfigs } from '../../src/io/live2d/rig/maskConfigs.js';
-import { resolvePhysicsRules, seedPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
+import {
+  gatherPhysicsRules,
+  seedPhysicsModifiers,
+  buildPhysicsRulesFromProject,
+} from '../../src/io/live2d/rig/physicsConfig.js';
 import { resolveBoneConfig, seedBoneConfig } from '../../src/io/live2d/rig/boneConfig.js';
 import {
   resolveVariantFadeRules,
@@ -154,7 +158,10 @@ function computeOutputs(project) {
     rotationDeformerConfig: rotCfg,
   });
 
-  const physicsRules = resolvePhysicsRules(project);
+  // v50 (2026-06-08): gather from per-node modifiers if any are seeded;
+  // else build from defaults (the legacy resolvePhysicsRules semantic).
+  const gathered = gatherPhysicsRules(project);
+  const physicsRules = gathered.length > 0 ? gathered : buildPhysicsRulesFromProject(project);
   const physics3 = generatePhysics3Json({
     paramDefs: paramSpec,
     meshes: meshes.map(m => ({ tag: m.tag })),
@@ -186,7 +193,7 @@ const generatorOutputs = computeOutputs(projectA);
 const projectB = buildSyntheticProject();
 seedParameters(projectB);
 seedMaskConfigs(projectB);
-seedPhysicsRules(projectB);
+seedPhysicsModifiers(projectB);
 seedBoneConfig(projectB);
 seedVariantFadeRules(projectB);
 seedEyeClosureConfig(projectB);

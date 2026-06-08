@@ -29,7 +29,7 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 // (eager via AppShell), but the heavy rig pipeline (cmo3/moc3/can3
 // writers + exporter graph) only loads when a user actually triggers
 // initializeRig / runStage / refitAll.
-import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
+import { gatherPhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
 import { runRigInitIdentityDiag } from '../io/live2d/rig/rigInitIdentityDiag.js';
 import { resolveAutoRigConfig } from '../io/live2d/rig/autoRigConfig.js';
@@ -325,7 +325,7 @@ export async function initializeRig() {
     let rigSpec = harvest.rigSpec ?? null;
     if (rigSpec) {
       const postSeedProject = useProjectStore.getState().project;
-      rigSpec = { ...rigSpec, physicsRules: resolvePhysicsRules(postSeedProject) };
+      rigSpec = { ...rigSpec, physicsRules: gatherPhysicsRules(postSeedProject) };
     }
     useRigSpecStore.setState({
       rigSpec,
@@ -409,7 +409,7 @@ const KEYFORM_STAGES = new Set(['faceParallax', 'bodyWarpChain', 'rigWarps']);
 const STAGE_TO_ACTION = {
   parameters:             'seedParameters',
   maskConfigs:            'seedMaskConfigs',
-  physicsRules:           'seedPhysicsRules',
+  physicsRules:           'seedPhysicsModifiers',
   boneConfig:             'seedBoneConfig',
   variantFadeRules:       'seedVariantFadeRules',
   eyeClosureConfig:       'seedEyeClosureConfig',

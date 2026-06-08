@@ -37,7 +37,7 @@ let _seedsPromise = null;
  * @typedef {Object} SeedModule
  * @property {(p: any, mode?: string) => void} seedParameters
  * @property {(p: any, mode?: string) => void} seedMaskConfigs
- * @property {(p: any, mode?: string) => void} seedPhysicsRules
+ * @property {(p: any, mode?: string) => void} seedPhysicsModifiers
  * @property {(p: any) => void} seedBoneConfig
  * @property {(p: any) => void} seedVariantFadeRules
  * @property {(p: any) => void} seedEyeClosureConfig
@@ -83,7 +83,7 @@ export function loadSeedModule() {
       return {
         seedParameters: paramSpec.seedParameters,
         seedMaskConfigs: maskConfigs.seedMaskConfigs,
-        seedPhysicsRules: physicsConfig.seedPhysicsRules,
+        seedPhysicsModifiers: physicsConfig.seedPhysicsModifiers,
         seedBoneConfig: boneConfig.seedBoneConfig,
         seedVariantFadeRules: variantFadeRules.seedVariantFadeRules,
         seedEyeClosureConfig: eyeClosureConfig.seedEyeClosureConfig,

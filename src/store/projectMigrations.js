@@ -109,6 +109,7 @@ import { migrateVariantRoleAliasRetirement } from './migrations/v46_variant_role
 import { migrateRuntimeParentStrip } from './migrations/v47_runtime_parent_strip.js';
 import { migrateRigParentStrip } from './migrations/v48_rig_parent_strip.js';
 import { migrateVariantVisibleToOpacity } from './migrations/v49_variant_visible_to_opacity.js';
+import { migratePhysicsModifierPerNode } from './migrations/v50_physics_modifier_per_node.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -877,6 +878,22 @@ const MIGRATIONS = {
   // works end-to-end. See `src/store/migrations/v49_variant_visible_to_opacity.js`.
   49: (project) => {
     migrateVariantVisibleToOpacity(project);
+    return project;
+  },
+
+  // v50 — per-node physicsModifier port (Blender per-object physics
+  // parity, 2026-06-08). Walks `project.physicsRules[]` and attaches one
+  // physicsModifier per resolved output to its semantic owner node
+  // (bone group for `ParamRotation_*` outputs; first matching part for
+  // tag-based sway rules). Retires `project.physicsRules[]` and the
+  // dead `project.physics_groups[]` field. Per-node modifiers are the
+  // sole source of truth for tickPhysics, depgraph buildPhysicsRelations,
+  // and exporter (physics3.json + cmo3 emit).
+  //
+  // See `src/store/migrations/v50_physics_modifier_per_node.js` and the
+  // 2026-06-08 RULE №4 follow-up session entry.
+  50: (project) => {
+    migratePhysicsModifierPerNode(project);
     return project;
   },
 

@@ -97,26 +97,36 @@ function assert(cond, name) {
     'rigWarp deformer location identifies node id');
 }
 
-// ── findReferences: physics inputs ─────────────────────────────────
+// ── findReferences: physics inputs (v50 per-node modifiers) ────────
 {
   const project = {
-    physicsRules: [
+    nodes: [
       {
-        inputs: [
-          { paramId: 'ParamAngleX', weight: 60 },
-          { paramId: 'ParamAngleZ', weight: 60 },
-        ],
-        outputs: ['hair-front-1'],
+        id: 'n0', type: 'group', name: 'rig_root',
+        modifiers: [{
+          type: 'physicsModifier', ruleId: 'r1',
+          inputs: [
+            { paramId: 'ParamAngleX', weight: 60 },
+            { paramId: 'ParamAngleZ', weight: 60 },
+          ],
+        }],
       },
       {
-        inputs: [{ paramId: 'ParamAngleX', weight: 100 }],
+        id: 'n1', type: 'part', name: 'front hair',
+        modifiers: [{
+          type: 'physicsModifier', ruleId: 'r2',
+          inputs: [{ paramId: 'ParamAngleX', weight: 100 }],
+        }],
       },
     ],
   };
   const r = findReferences(project, 'ParamAngleX');
   assert(r.physicsInputs.length === 2, 'ParamAngleX: 2 physics hits');
-  assert(r.physicsInputs[0].location === 'physicsRules[0]:inputs[0]', 'physics rule[0] inputs[0]');
-  assert(r.physicsInputs[1].location === 'physicsRules[1]:inputs[0]', 'physics rule[1] inputs[0]');
+  const locs = r.physicsInputs.map((p) => p.location).sort();
+  assert(locs[0] === 'nodes[0]:modifiers[0]:inputs[0]',
+    'physics input location identifies node + modifier indices');
+  assert(locs[1] === 'nodes[1]:modifiers[0]:inputs[0]',
+    'physics input location identifies node + modifier indices');
 }
 
 // ── Edge cases ─────────────────────────────────────────────────────
@@ -172,8 +182,14 @@ function assert(cond, name) {
         ],
       },
     ],
-    physicsRules: [
-      { inputs: [{ paramId: 'ParamPhantomDriver' }] },
+    nodes: [
+      {
+        id: 'g_root', type: 'group', name: 'rig_root',
+        modifiers: [{
+          type: 'physicsModifier', ruleId: 'r',
+          inputs: [{ paramId: 'ParamPhantomDriver' }],
+        }],
+      },
     ],
   };
   const orphans = findOrphanReferences(project);

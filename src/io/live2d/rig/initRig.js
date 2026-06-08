@@ -85,20 +85,13 @@ const TAG_TO_SUBSYSTEM = {
   'mouth':          'mouthRig',
 };
 
-/**
- * GAP-008 — physics-rule name → owning subsystem prefix-mapping. Rules
- * are named like `hair-front-1`, `clothing-skirt`, `arm-elbow-l`. The
- * first dash-segment selects the subsystem.
- */
-function physicsRuleSubsystem(ruleName) {
-  if (typeof ruleName !== 'string') return null;
-  if (ruleName.startsWith('hair-')) return 'hairRig';
-  if (ruleName.startsWith('clothing-') || ruleName.startsWith('skirt-')
-      || ruleName.startsWith('shirt-') || ruleName.startsWith('pants-')) return 'clothingRig';
-  if (ruleName.startsWith('arm-') || ruleName.includes('elbow')) return 'armPhysics';
-  if (ruleName.startsWith('breath')) return 'bodyWarps';
-  return null;
-}
+// GAP-008 `physicsRuleSubsystem` (name-prefix mapper) and the related
+// `filterPhysicsRulesBySubsystems` filter were retired alongside the
+// per-node physicsModifier port (v50, 2026-06-08). The subsystem opt-out
+// now gates SEEDING by `rule.category` in `seedPhysicsModifiers` —
+// `category` is a structured field set on every baseline rule, unlike
+// the old name-prefix gate that silently no-op'd because baseline names
+// like "Hair Front" never matched `startsWith('hair-')`.
 
 /**
  * Filter a populated `rigSpec` into the four seedable shapes:
@@ -233,25 +226,6 @@ function buildPartIdToTagMap(nodes) {
     if (tag) m.set(n.id, tag);
   }
   return m;
-}
-
-/**
- * Filter physics rules by subsystem opt-out flags. Rules whose name
- * matches a disabled subsystem prefix are dropped. Used by Init Rig
- * after seeding to prune `project.physicsRules` consistently with the
- * dropped rigWarps.
- *
- * @param {Array<{name?:string}>} rules
- * @param {import('./autoRigConfig.js').AutoRigSubsystems|null} subsystems
- * @returns {Array<{name?:string}>}
- */
-export function filterPhysicsRulesBySubsystems(rules, subsystems) {
-  if (!Array.isArray(rules) || !subsystems) return rules ?? [];
-  return rules.filter((rule) => {
-    const owning = physicsRuleSubsystem(rule?.name);
-    if (!owning) return true;
-    return subsystems[owning] !== false;
-  });
 }
 
 /**

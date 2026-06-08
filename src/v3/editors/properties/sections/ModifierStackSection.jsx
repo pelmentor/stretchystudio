@@ -173,6 +173,7 @@ export function ModifierStackSection({ nodeId }) {
         const enabled = mod.enabled !== false;
         const isArmature = mod.type === 'armature';
         const isLattice = mod.type === 'lattice';
+        const isPhysics = mod.type === 'physicsModifier';
         // v43 — a lattice modifier references its cage OBJECT via `objectId`;
         // warp/rotation via `deformerId`. Resolve either via the seam.
         const refId = modifierRefId(mod);
@@ -181,6 +182,8 @@ export function ModifierStackSection({ nodeId }) {
         // of raw bone GUIDs. Mirrors Blender's modifier panel which
         // shows the bound armature Object's name. Lattice rows show the
         // referenced cage object's name (Blender's `LatticeModifierData.object`).
+        // PhysicsModifier rows (v50, 2026-06-08) show the rule's
+        // human-readable name + the driven output paramId.
         const labelText = (() => {
           if (mod.type === 'armature') {
             const j = mod.data?.jointBoneRole ?? 'bone';
@@ -191,9 +194,17 @@ export function ModifierStackSection({ nodeId }) {
             const obj = refId ? nodes.find((n) => n?.id === refId) : null;
             return obj?.name ?? refId ?? '<missing>';
           }
+          if (isPhysics) {
+            const out = mod.output?.paramId;
+            return out ? `${mod.name ?? mod.ruleId ?? 'Physics'} → ${out}`
+                       : (mod.name ?? mod.ruleId ?? '<physics>');
+          }
           return refId ?? '<missing>';
         })();
-        const typeBadge = isArmature ? 'Armature' : isLattice ? 'Lattice' : (mod.type ?? '—');
+        const typeBadge = isArmature ? 'Armature'
+          : isLattice ? 'Lattice'
+          : isPhysics ? 'Physics'
+          : (mod.type ?? '—');
         return (
           <div
             key={`${refId ?? 'unk'}-${idx}`}

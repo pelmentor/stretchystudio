@@ -1,28 +1,23 @@
 // @ts-check
 
 /**
- * v3 Phase 1B — PhysicsTab.
+ * v3 — PhysicsTab.
  *
- * Read-only inspector for physics rules that affect the selected
- * group. Physics rules drive sway parameters (hair, clothing, bust,
- * arm) by simulating short pendulums whose outputs map onto
- * `ParamRotation_<group>`. Each rule has gating tags + bone-output
- * lookups; this tab shows the rules that match the currently
- * selected group / bone-bearing entity.
- *
- * The UI surface is deliberately minimal — a list of matching rules
- * with their inputs / vertex chain length / output param ids. Full
- * editing arrives in Phase 2E (Physics Editor).
+ * Per-node physics inspector (v50, 2026-06-08). Lists every
+ * `physicsModifier` attached to the selected node's modifier stack and
+ * lets the user toggle enabled / delete per modifier. Project-wide
+ * actions (Import .physics3.json, Reset to defaults) remain accessible
+ * here because they're the canonical entry points; both rewrite the
+ * full project-wide modifier set.
  *
  * @module v3/editors/properties/tabs/PhysicsTab
  */
 
 import { useRef, useState } from 'react';
-import { Wind, Upload, RotateCcw } from 'lucide-react';
+import { Wind, Upload, RotateCcw, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
-import { resolvePhysicsRules } from '../../../../io/live2d/rig/physicsConfig.js';
+import { installImportedPhysicsRules } from '../../../../io/live2d/rig/physicsConfig.js';
 import { parsePhysics3Json } from '../../../../io/live2d/physics3jsonImport.js';
-import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
 import { runStage } from '../../../../services/RigService.js';
 import { getBoneRole } from '../../../../store/objectDataAccess.js';
 
@@ -40,16 +35,19 @@ export function PhysicsTab({ nodeId }) {
       </div>
     );
   }
-  return <PhysicsTabBody node={node} />;
+  return <PhysicsTabBody nodeId={nodeId} />;
 }
 
-function PhysicsTabBody({ node }) {
-  const project = useProjectStore((s) => s.project);
+function PhysicsTabBody({ nodeId }) {
   const updateProject = useProjectStore((s) => s.updateProject);
+  const node = useProjectStore((s) => s.project.nodes.find((n) => n.id === nodeId));
   const fileRef = useRef(null);
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const stored = Array.isArray(project.physicsRules) ? project.physicsRules : [];
+
+  const modifiers = Array.isArray(node?.modifiers)
+    ? node.modifiers.filter((m) => m && m.type === 'physicsModifier')
+    : [];
 
   function handleFile(e) {
     const file = e.target?.files?.[0];
@@ -60,15 +58,13 @@ function PhysicsTabBody({ node }) {
       try {
         const text = String(reader.result ?? '');
         const { rules, warnings } = parsePhysics3Json(text);
+        let installed = 0;
         updateProject((p) => {
-          // V3 Re-Rig Phase 0: parsePhysics3Json already marks every rule
-          // with `_userAuthored: true`. Defensive re-mark in case a future
-          // import path adds rules through a different code path.
-          p.physicsRules = rules.map((r) => markUserAuthored(r));
+          installed = installImportedPhysicsRules(p, rules);
         });
         setStatus({
           kind: warnings.length ? 'warn' : 'ok',
-          text: `Imported ${rules.length} rule(s) from ${file.name}.${
+          text: `Imported ${rules.length} rule(s) (${installed} modifier(s) installed) from ${file.name}.${
             warnings.length ? ` ${warnings.length} warning(s).` : ''
           }`,
           warnings,
@@ -81,11 +77,6 @@ function PhysicsTabBody({ node }) {
     e.target.value = '';
   }
 
-  // V3 Re-Rig Phase 4 — Reset routes through `RigService.runStage` so
-  // there's one execution path for "reseed physicsRules from defaults".
-  // Semantics unchanged: Reset = `mode: 'replace'` (destructive, wipes
-  // imported rules); RigStagesTab → "Refit Physics" = `mode: 'merge'`
-  // (preserves imported rules). Two distinct intents, two buttons.
   async function handleReset() {
     if (busy) return;
     setBusy(true);
@@ -93,7 +84,7 @@ function PhysicsTabBody({ node }) {
     try {
       const result = await runStage('physicsRules', { mode: 'replace' });
       if (result.ok) {
-        setStatus({ kind: 'ok', text: 'Reset to default rules.' });
+        setStatus({ kind: 'ok', text: 'Reset to default physics modifiers project-wide.' });
       } else {
         setStatus({ kind: 'error', text: result.error ?? 'Reset failed.' });
       }
@@ -102,30 +93,50 @@ function PhysicsTabBody({ node }) {
     }
   }
 
-  const rules = resolvePhysicsRules(project) ?? [];
-  const groupName = node.name ?? '';
-  // Match rules whose outputs include any param ending in
-  // "_<groupName-sanitised>" — that's how Stage 6 of the physics
-  // resolver names per-bone outputs (`ParamRotation_<sanitised>`).
-  const sanitised = groupName.replace(/[^A-Za-z0-9_]/g, '_');
-  const suffix = sanitised ? `_${sanitised}` : null;
-  const matched = rules.filter((r) => {
-    if (!suffix) return false;
-    return (r.outputs ?? []).some((o) => o.paramId?.endsWith(suffix));
-  });
+  function toggleEnabled(modifierIndex) {
+    updateProject((p) => {
+      const n = p.nodes.find((x) => x.id === nodeId);
+      if (!n || !Array.isArray(n.modifiers)) return;
+      const physMods = n.modifiers
+        .map((m, i) => ({ m, i }))
+        .filter((x) => x.m && x.m.type === 'physicsModifier');
+      const target = physMods[modifierIndex];
+      if (!target) return;
+      n.modifiers[target.i] = {
+        ...target.m,
+        enabled: target.m.enabled === false ? true : false,
+      };
+    });
+  }
+
+  function deleteModifier(modifierIndex) {
+    updateProject((p) => {
+      const n = p.nodes.find((x) => x.id === nodeId);
+      if (!n || !Array.isArray(n.modifiers)) return;
+      const physMods = n.modifiers
+        .map((m, i) => ({ m, i }))
+        .filter((x) => x.m && x.m.type === 'physicsModifier');
+      const target = physMods[modifierIndex];
+      if (!target) return;
+      n.modifiers = n.modifiers.filter((_m, i) => i !== target.i);
+      if (n.modifiers.length === 0) delete n.modifiers;
+    });
+  }
+
+  const groupName = node?.name ?? '';
 
   return (
     <div className="flex flex-col gap-1.5 p-2 overflow-auto">
       <Section label="Physics" icon={<Wind size={11} />}>
-        <Row label="Group">
+        <Row label="Node">
           <span className="text-xs text-foreground truncate">{groupName || '—'}</span>
         </Row>
         <Row label="Bone role">
           <span className="text-xs font-mono text-foreground">{getBoneRole(node) ?? '—'}</span>
         </Row>
-        <Row label="Rules">
+        <Row label="Modifiers">
           <span className="text-xs text-foreground tabular-nums">
-            {matched.length} matched / {stored.length || rules.length} total
+            {modifiers.length} physics modifier(s) on this node
           </span>
         </Row>
         <div className="flex items-center gap-1 pt-1">
@@ -133,7 +144,7 @@ function PhysicsTabBody({ node }) {
             type="button"
             onClick={() => fileRef.current?.click()}
             className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-foreground hover:bg-muted/50 transition-colors"
-            title="Replace project physics rules with rules read from a .physics3.json file"
+            title="Replace ALL physics modifiers project-wide with rules read from a .physics3.json file"
           >
             <Upload size={11} /> Import .physics3.json
           </button>
@@ -142,7 +153,7 @@ function PhysicsTabBody({ node }) {
             onClick={handleReset}
             disabled={busy}
             className="h-6 px-2 inline-flex items-center gap-1 rounded border border-border text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Re-seed project.physicsRules from the auto-rig defaults (drops imported rules)"
+            title="Re-seed default physics modifiers project-wide (drops imported rules)"
           >
             <RotateCcw size={11} /> Reset
           </button>
@@ -180,37 +191,59 @@ function PhysicsTabBody({ node }) {
         ) : null}
       </Section>
 
-      {matched.length > 0 ? (
-        <Section label={`Matching rules (${matched.length})`}>
+      {modifiers.length > 0 ? (
+        <Section label={`Physics modifiers (${modifiers.length})`}>
           <div className="flex flex-col gap-2">
-            {matched.map((r) => (
-              <div key={r.id} className="border border-border/60 rounded p-1.5 bg-muted/20">
-                <div className="text-xs font-medium text-foreground">{r.name ?? r.id}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">
-                  {r.category ?? '—'} · {r.vertices?.length ?? 0} pendulum verts ·{' '}
-                  {(r.inputs ?? []).length} input(s)
-                </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {(r.outputs ?? [])
-                    .filter((o) => suffix && o.paramId?.endsWith(suffix))
-                    .map((o, i) => (
+            {modifiers.map((m, i) => {
+              const enabled = m.enabled !== false;
+              return (
+                <div key={`${m.ruleId}:${m.output?.paramId ?? i}`}
+                     className={`border rounded p-1.5 ${enabled ? 'border-border/60 bg-muted/20' : 'border-border/30 bg-muted/10 opacity-60'}`}>
+                  <div className="flex items-center gap-1">
+                    <div className="flex-1 text-xs font-medium text-foreground truncate">
+                      {m.name ?? m.ruleId}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleEnabled(i)}
+                      className="h-5 w-5 inline-flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                      title={enabled ? 'Disable modifier' : 'Enable modifier'}
+                    >
+                      {enabled ? <Eye size={11} /> : <EyeOff size={11} />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteModifier(i)}
+                      className="h-5 w-5 inline-flex items-center justify-center rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                      title="Delete this physics modifier"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    {m.category ?? '—'} · {m.vertices?.length ?? 0} pendulum verts ·{' '}
+                    {(m.inputs ?? []).length} input(s)
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {m.output ? (
                       <span
-                        key={i}
                         className="px-1.5 h-4 inline-flex items-center rounded bg-primary/10 text-primary text-[10px] font-mono"
-                        title={`${o.paramId} (vertex ${o.vertexIndex}, scale ${o.scale})`}
+                        title={`${m.output.paramId} (vertex ${m.output.vertexIndex}, scale ${m.output.scale}${m.output.isReverse ? ', reverse' : ''})`}
                       >
-                        {o.paramId}
+                        {m.output.paramId}
                       </span>
-                    ))}
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Section>
       ) : (
         <p className="text-[10px] text-muted-foreground leading-snug px-1">
-          No physics rules drive this group. Phase 2E adds an editor
-          for authoring custom rules.
+          No physics modifiers on this node. Use Import .physics3.json or
+          Reset to seed defaults across the project, then return here to
+          inspect / toggle / delete per-node modifiers.
         </p>
       )}
     </div>

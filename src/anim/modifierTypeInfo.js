@@ -161,6 +161,24 @@ function rotationDeformVerts(modifier, ctx, _mesh, positions) {
 }
 
 /**
+ * physicsModifier deformVerts — identity. The physics modifier carries
+ * a pendulum-sim rule that WRITES PARAM VALUES (not vertex positions);
+ * the actual simulation runs in `physicsTick.js` (gathering modifiers
+ * from `project.nodes[*].modifiers[]`), with outputs landing in the
+ * per-frame `paramOverrides` Map that PARAM_EVAL consumes downstream.
+ * The geometry iterator passes through unchanged so the chain stays
+ * correct when physics sits alongside deformers in a node's stack.
+ *
+ * Closest Blender analogue: cloth/softbody modifiers that simulate but
+ * cache results elsewhere — our cache IS the param-overrides Map.
+ *
+ * @type {ModifierTypeInfo['deformVerts']}
+ */
+function physicsModifierDeformVerts(_modifier, _ctx, _mesh, positions) {
+  return { positions, isCanvasFinal: false };
+}
+
+/**
  * Registry of modifier kinds.
  *
  * @type {Record<string, ModifierTypeInfo>}
@@ -180,6 +198,12 @@ export const MODIFIER_TYPES = {
   rotation: {
     name: 'Rotation',
     deformVerts: rotationDeformVerts,
+  },
+  // v50 (2026-06-08): physics modifier per-node — gathered separately by
+  // physicsTick; identity in the geometry iterator.
+  physicsModifier: {
+    name: 'Physics',
+    deformVerts: physicsModifierDeformVerts,
   },
 };
 

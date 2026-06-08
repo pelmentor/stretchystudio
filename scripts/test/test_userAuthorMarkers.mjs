@@ -17,7 +17,7 @@ import {
   STAGE_KEY,
 } from '../../src/io/live2d/rig/userAuthorMarkers.js';
 import { seedMaskConfigs } from '../../src/io/live2d/rig/maskConfigs.js';
-import { seedPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
+import { seedPhysicsModifiers, gatherPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
 import { seedAutoRigConfig } from '../../src/io/live2d/rig/autoRigConfig.js';
 import { seedFaceParallax } from '../../src/io/live2d/rig/faceParallaxStore.js';
 import { seedBodyWarpChain } from '../../src/io/live2d/rig/bodyWarpStore.js';
@@ -227,50 +227,75 @@ function makeMaskProject() {
     'merge: unmarked entry NOT preserved');
 }
 
-// --- seedPhysicsRules: replace vs merge ---
+// --- seedPhysicsModifiers: replace vs merge (post-v50) ---
+
+// v50 (2026-06-08): physics rules live as per-node physicsModifier
+// entries instead of `project.physicsRules[]`. The merge/replace
+// semantics now operate on the per-node modifier list — same
+// `_userAuthored` marker, different storage. The owner picker drops
+// imported rules onto either a bone group (`ParamRotation_*`) or the
+// rig root group (fallback), so the project needs at least one group.
 
 function makePhysicsProject() {
   return {
     nodes: [
-      { id: 'g1', type: 'group', name: 'hair_front_root', boneRole: 'hair_front_root' },
+      { id: 'g_root', type: 'group', name: 'rig_root' },
     ],
   };
 }
 
+// Helper: pre-install a user-authored physicsModifier directly (the
+// pre-v50 fixture wrote a rule into project.physicsRules; post-v50 we
+// install it as the per-node form so `merge` sees the prior shape).
+function preInstallUserAuthoredModifier(project, rule) {
+  const root = project.nodes.find((n) => n.id === 'g_root');
+  if (!Array.isArray(root.modifiers)) root.modifiers = [];
+  root.modifiers.push({
+    type: 'physicsModifier',
+    ruleId: rule.id,
+    name: rule.name,
+    category: rule.category,
+    inputs: rule.inputs.map((i) => ({ ...i })),
+    vertices: rule.vertices.map((v) => ({ ...v })),
+    normalization: { ...rule.normalization },
+    output: { ...rule.outputs[0] },
+    enabled: true,
+    mode: 7,
+    showInEditor: true,
+    _userAuthored: true,
+  });
+}
+
+const IMPORTED_RULE = {
+  id: 'imported-1',
+  name: 'Imported Custom',
+  category: 'imported',
+  inputs: [{ paramId: 'X', type: 'SRC_TO_X', weight: 100, isReverse: false }],
+  outputs: [{ paramId: 'ParamY', vertexIndex: 1, scale: 10, isReverse: false }],
+  vertices: [{ x: 0, y: 0 }, { x: 0, y: 10 }],
+  normalization: { posMin: -10, posDef: 0, posMax: 10, angleMin: -10, angleDef: 0, angleMax: 10 },
+};
+
 {
   // Default replace wipes imported rules.
   const project = makePhysicsProject();
-  project.physicsRules = [markUserAuthored({
-    id: 'imported-1',
-    name: 'Imported Custom',
-    category: 'imported',
-    inputs: [{ paramId: 'X', type: 'SRC_TO_X', weight: 100, isReverse: false }],
-    outputs: [{ paramId: 'ParamY', vertexIndex: 1, scale: 10, isReverse: false }],
-    vertices: [{ x: 0, y: 0 }, { x: 0, y: 10 }],
-    normalization: { posMin: -10, posDef: 0, posMax: 10, angleMin: -10, angleDef: 0, angleMax: 10 },
-  })];
-  seedPhysicsRules(project); // 'replace' default
-  assert(!project.physicsRules.some((r) => r.id === 'imported-1'),
+  preInstallUserAuthoredModifier(project, IMPORTED_RULE);
+  seedPhysicsModifiers(project); // 'replace' default
+  const gathered = gatherPhysicsRules(project);
+  assert(!gathered.some((r) => r.id === 'imported-1'),
     'replace: imported rule wiped');
 }
 
 {
   // Merge: imported rule preserved alongside auto-derived rules.
   const project = makePhysicsProject();
-  project.physicsRules = [markUserAuthored({
-    id: 'imported-1',
-    name: 'Imported Custom',
-    category: 'imported',
-    inputs: [{ paramId: 'X', type: 'SRC_TO_X', weight: 100, isReverse: false }],
-    outputs: [{ paramId: 'ParamY', vertexIndex: 1, scale: 10, isReverse: false }],
-    vertices: [{ x: 0, y: 0 }, { x: 0, y: 10 }],
-    normalization: { posMin: -10, posDef: 0, posMax: 10, angleMin: -10, angleDef: 0, angleMax: 10 },
-  })];
-  seedPhysicsRules(project, 'merge');
-  assert(project.physicsRules.some((r) => r.id === 'imported-1'),
+  preInstallUserAuthoredModifier(project, IMPORTED_RULE);
+  seedPhysicsModifiers(project, 'merge');
+  const gathered = gatherPhysicsRules(project);
+  assert(gathered.some((r) => r.id === 'imported-1'),
     'merge: imported rule preserved');
-  // Plus the auto rules from defaults.
-  assert(project.physicsRules.length > 1, 'merge: imported + auto rules');
+  // Plus auto-seeded baseline rules.
+  assert(gathered.length > 1, 'merge: imported + auto rules');
 }
 
 // --- seedAutoRigConfig: subsystems preservation (clobber bug fix) ---

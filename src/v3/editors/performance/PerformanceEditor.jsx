@@ -25,6 +25,17 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 
+function countPhysicsModifiers(project) {
+  let n = 0;
+  for (const node of project?.nodes ?? []) {
+    if (!Array.isArray(node?.modifiers)) continue;
+    for (const mod of node.modifiers) {
+      if (mod && mod.type === 'physicsModifier') n += 1;
+    }
+  }
+  return n;
+}
+
 export function PerformanceEditor() {
   const project = useProjectStore((s) => s.project);
   const rigSpec = useRigSpecStore((s) => s.rigSpec);
@@ -100,7 +111,7 @@ export function PerformanceEditor() {
           <Row label="Actions" value={project.actions?.length ?? 0} />
           <Row label="Parameters" value={project.parameters?.length ?? 0} />
           <Row label="Mask configs" value={project.maskConfigs?.length ?? 0} />
-          <Row label="Physics rules" value={project.physicsRules?.length ?? 0} />
+          <Row label="Physics modifiers" value={countPhysicsModifiers(project)} />
         </Section>
 
         <Section label="Mesh">

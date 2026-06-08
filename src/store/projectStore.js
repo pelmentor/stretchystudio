@@ -351,10 +351,8 @@ export const useProjectStore = create((set, get) => {
       }
     */
     parameters: [],
-    physics_groups: [],
     actions: [],
     maskConfigs: [],
-    physicsRules: [],
     boneConfig: null,
     variantFadeRules: null,
     eyeClosureConfig: null,
@@ -702,16 +700,21 @@ export const useProjectStore = create((set, get) => {
         if (!Array.isArray(action?.fcurves)) continue;
         action.fcurves = action.fcurves.filter((fc) => !fcurveTargetsParam(fc, paramId));
       }
-      for (const rule of proj.physicsRules ?? []) {
-        if (!Array.isArray(rule?.inputs)) continue;
-        rule.inputs = rule.inputs.filter((inp) => inp?.paramId !== paramId);
+      // v50 (2026-06-08): physics inputs live on per-node physicsModifier.
+      // Cascade the delete across every owner node's modifier stack.
+      for (const n of proj.nodes ?? []) {
+        if (!Array.isArray(n?.modifiers)) continue;
+        for (const m of n.modifiers) {
+          if (!m || m.type !== 'physicsModifier' || !Array.isArray(m.inputs)) continue;
+          m.inputs = m.inputs.filter((inp) => inp?.paramId !== paramId);
+        }
       }
     });
   },
 
   /**
    * Rename a parameter id. Cascades the rename through deformer
-   * bindings, animation tracks, and physics rule inputs. No-op if
+   * bindings, animation tracks, and physics modifier inputs. No-op if
    * `oldId === newId`. Returns false if `newId` collides with another
    * existing param. Stamps `_userAuthored: true` on the renamed entry.
    */
@@ -738,9 +741,14 @@ export const useProjectStore = create((set, get) => {
           renameFCurveParam(fc, oldId, newId);
         }
       }
-      for (const rule of proj.physicsRules ?? []) {
-        for (const inp of rule?.inputs ?? []) {
-          if (inp?.paramId === oldId) inp.paramId = newId;
+      // v50 (2026-06-08): physics inputs live on per-node physicsModifier.
+      for (const n of proj.nodes ?? []) {
+        if (!Array.isArray(n?.modifiers)) continue;
+        for (const m of n.modifiers) {
+          if (!m || m.type !== 'physicsModifier' || !Array.isArray(m.inputs)) continue;
+          for (const inp of m.inputs) {
+            if (inp?.paramId === oldId) inp.paramId = newId;
+          }
         }
       }
     });
@@ -1331,10 +1339,8 @@ export const useProjectStore = create((set, get) => {
         },
       ];
       state.project.parameters = [];
-      state.project.physics_groups = [];
       state.project.actions = [];
       state.project.maskConfigs = [];
-      state.project.physicsRules = [];
       state.project.boneConfig = null;
       state.project.variantFadeRules = null;
       state.project.eyeClosureConfig = null;
@@ -1437,9 +1443,7 @@ export const useProjectStore = create((set, get) => {
       state.project.nodes = projectData.nodes;
       state.project.actions = projectData.actions;
       state.project.parameters = projectData.parameters;
-      state.project.physics_groups = projectData.physics_groups;
       state.project.maskConfigs = projectData.maskConfigs;
-      state.project.physicsRules = projectData.physicsRules;
       state.project.boneConfig = projectData.boneConfig;
       state.project.variantFadeRules = projectData.variantFadeRules;
       state.project.eyeClosureConfig = projectData.eyeClosureConfig;
@@ -1503,11 +1507,15 @@ export const useProjectStore = create((set, get) => {
   seedMaskConfigs:            async (...args) => projectMutator((await loadSeedModule()).seedMaskConfigs)(...args),
 
   /**
-   * Seed `project.physicsRules` from DEFAULT_PHYSICS_RULES (Stage 6).
-   * boneOutputs are resolved against the project's groups (boneRole
-   * lookup) and flattened into outputs[]. Destructive.
+   * Seed per-node physicsModifier entries from DEFAULT_PHYSICS_RULES
+   * (v50, 2026-06-08). Walks each baseline rule, splits by resolved
+   * output, attaches one modifier per output to its owner node (bone
+   * group for ParamRotation_* outputs; first matching part for tag-
+   * based sway rules). Subsystem opt-out gates seeding by
+   * `rule.category`. Destructive in `'replace'`; preserves
+   * `_userAuthored: true` modifiers in `'merge'`.
    */
-  seedPhysicsRules:           async (...args) => projectMutator((await loadSeedModule()).seedPhysicsRules)(...args),
+  seedPhysicsModifiers:       async (...args) => projectMutator((await loadSeedModule()).seedPhysicsModifiers)(...args),
 
   /**
    * Seed `project.boneConfig` from defaults (Stage 7). Currently sets
@@ -1657,7 +1665,7 @@ export const useProjectStore = create((set, get) => {
       // params + user-added keys survive Init Rig 'merge'.
       seeds.seedParameters(proj, mode);
       seeds.seedMaskConfigs(proj, mode);
-      seeds.seedPhysicsRules(proj, mode);
+      seeds.seedPhysicsModifiers(proj, mode);
       seeds.seedBoneConfig(proj);
       seeds.seedVariantFadeRules(proj);
       seeds.seedEyeClosureConfig(proj);
@@ -1927,31 +1935,43 @@ export const useProjectStore = create((set, get) => {
         { orphans: boneOrphans }
       );
     }
-    // Hole I-6: physicsRules[].outputs reference bone group NAMES
-    // (resolved through `boneOutputs`, see physicsConfig). When the
-    // group renamed/deleted, output silently zeros. Cross-check rule
-    // outputs against current group names + ids; warn on miss.
+    // Hole I-6 (post-v50, 2026-06-08): per-node physicsModifier outputs
+    // reference bone group NAMES via `ParamRotation_<sanitized>`. When
+    // the group renames or its bone deletes, the output silently zeros.
+    // Walk each node's physicsModifier list and cross-check the output
+    // paramId's sanitised tail against current group names + ids.
     const groupNames = new Set();
     for (const n of postSeedProject.nodes ?? []) {
       if (n?.type === 'group' && typeof n.name === 'string') groupNames.add(n.name);
     }
     const physicsOrphans = [];
-    for (let ri = 0; ri < (postSeedProject.physicsRules ?? []).length; ri++) {
-      const rule = postSeedProject.physicsRules[ri];
-      const outs = Array.isArray(rule?.outputs) ? rule.outputs : [];
-      for (let oi = 0; oi < outs.length; oi++) {
-        const out = outs[oi];
-        const target = typeof out === 'string' ? out : out?.bone ?? out?.boneId;
-        if (!target) continue;
+    for (let ni = 0; ni < (postSeedProject.nodes ?? []).length; ni++) {
+      const node = postSeedProject.nodes[ni];
+      if (!node || !Array.isArray(node.modifiers)) continue;
+      for (let mi = 0; mi < node.modifiers.length; mi++) {
+        const mod = node.modifiers[mi];
+        if (!mod || mod.type !== 'physicsModifier') continue;
+        const paramId = mod.output?.paramId;
+        if (typeof paramId !== 'string') continue;
+        const m = paramId.match(/^ParamRotation_(.+)$/);
+        if (!m) continue;
+        const target = m[1];
+        // Group names may have been sanitised; check both raw + id forms.
         if (!groupNames.has(target) && !groupIds.has(target)) {
-          physicsOrphans.push({ ruleIdx: ri, ruleName: rule?.name ?? null, output: target, location: `physicsRules[${ri}]:outputs[${oi}]` });
+          physicsOrphans.push({
+            nodeIdx: ni,
+            modifierIdx: mi,
+            ruleId: mod.ruleId,
+            output: paramId,
+            location: `nodes[${ni}]:modifiers[${mi}]:output`,
+          });
         }
       }
     }
     if (physicsOrphans.length > 0) {
       logger.warn(
         'physicsOrphans',
-        `${physicsOrphans.length} physics rule output(s) reference missing group(s)`,
+        `${physicsOrphans.length} physics modifier output(s) reference missing group(s)`,
         { orphans: physicsOrphans }
       );
     }

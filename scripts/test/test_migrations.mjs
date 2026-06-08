@@ -50,7 +50,8 @@ function assertThrows(fn, name) {
   assert(p.animations === undefined, 'v0→current: animations field deleted by v36');
   assertEq(p.actions, [], 'v0→current: actions [] (post-v36)');
   assertEq(p.parameters, [], 'v0 empty: parameters []');
-  assertEq(p.physics_groups, [], 'v0 empty: physics_groups []');
+  assert(p.physics_groups === undefined,
+    'v0→current: physics_groups stripped by v50 (dead field retirement)');
 }
 
 {
@@ -523,38 +524,66 @@ function assertThrows(fn, name) {
 // ---- v1 → v2 → v3: incremental migrations ----
 
 {
-  // A save at v1 lacks maskConfigs (added by v2) and physicsRules (added by v3).
+  // A save at v1 lacks maskConfigs (added by v2). v50 retires
+  // `project.physicsRules` (per-node modifier port).
   const p = { schemaVersion: 1, canvas: { width: 800, height: 600 }, nodes: [] };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v1→current: schemaVersion bumped');
   assertEq(p.maskConfigs, [], 'v1→current: maskConfigs added empty');
-  assertEq(p.physicsRules, [], 'v1→current: physicsRules added empty');
+  assert(p.physicsRules === undefined,
+    'v1→current: physicsRules retired (v50 per-node port)');
 }
 
 {
-  // A save at v2 lacks physicsRules. v3 migration adds it.
+  // A save at v2 still has no maskConfigs etc. v50 strips physicsRules.
   const p = { schemaVersion: 2, maskConfigs: [{ maskedMeshId: 'a', maskMeshIds: ['b'] }] };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v2→current: schemaVersion bumped');
-  assertEq(p.physicsRules, [], 'v2→current: physicsRules added');
+  assert(p.physicsRules === undefined, 'v2→current: physicsRules stripped by v50');
   assertEq(p.maskConfigs.length, 1, 'v2→current: existing maskConfigs preserved');
 }
 
 {
-  // Pre-existing physicsRules preserved.
-  const existing = [{ id: 'CustomRule', inputs: [], outputs: [], vertices: [] }];
-  const p = { schemaVersion: 2, physicsRules: existing };
+  // Pre-existing physicsRules MIGRATED to per-node modifiers by v50,
+  // then the field is stripped. Without owner nodes the migration has
+  // no owner to attach to → drops silently (the root-group fallback
+  // also fails when `project.nodes` is undefined).
+  const existing = [{
+    id: 'CustomRule',
+    name: 'Custom',
+    category: 'imported',
+    inputs: [{ paramId: 'ParamAngleX', type: 'SRC_TO_X', weight: 50 }],
+    vertices: [
+      { x: 0, y: 0, mobility: 1, delay: 1, acceleration: 1, radius: 0 },
+      { x: 0, y: 5, mobility: 1, delay: 1, acceleration: 1, radius: 5 },
+    ],
+    normalization: { posMin: -10, posMax: 10, posDef: 0, angleMin: -10, angleMax: 10, angleDef: 0 },
+    outputs: [{ paramId: 'ParamCustom', vertexIndex: 1, scale: 5, isReverse: false }],
+  }];
+  const p = { schemaVersion: 2, physicsRules: existing, nodes: [
+    { id: 'g_root', name: 'rig_root', type: 'group' },
+  ] };
   migrateProject(p);
-  assertEq(p.physicsRules, existing, 'v2→current: existing physicsRules preserved');
+  assert(p.physicsRules === undefined, 'v2→current: physicsRules field gone post-v50');
+  const root = p.nodes.find(n => n.id === 'g_root');
+  assert(root.modifiers?.some(m => m.type === 'physicsModifier' && m.ruleId === 'CustomRule'),
+    'v50 migrated CustomRule onto root group as physicsModifier');
 }
 
 {
   // A save at v3 lacks boneConfig. v4 migration adds it (as null).
-  const p = { schemaVersion: 3, physicsRules: [{ id: 'r' }] };
+  // v50 migrates / strips physicsRules.
+  const p = { schemaVersion: 3, physicsRules: [{
+    id: 'r', name: 'r',
+    inputs: [{ paramId: 'ParamA', type: 'SRC_TO_X', weight: 1 }],
+    vertices: [{ x: 0, y: 0 }, { x: 0, y: 1 }],
+    normalization: {},
+    outputs: [{ paramId: 'X', vertexIndex: 1, scale: 1 }],
+  }], nodes: [{ id: 'g', name: 'g', type: 'group' }] };
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v3→current: schemaVersion bumped');
   assert(p.boneConfig === null, 'v3→current: boneConfig added as null (resolver provides defaults)');
-  assertEq(p.physicsRules, [{ id: 'r' }], 'v3→current: existing physicsRules preserved');
+  assert(p.physicsRules === undefined, 'v3→current: physicsRules field retired');
 }
 
 {
@@ -947,7 +976,7 @@ function assertThrows(fn, name) {
   migrateProject(p);
   assertEq(p.schemaVersion, CURRENT_SCHEMA_VERSION, 'v0→current: walked all migrations');
   assertEq(p.maskConfigs, [], 'v0→current: maskConfigs added');
-  assertEq(p.physicsRules, [], 'v0→current: physicsRules added');
+  assert(p.physicsRules === undefined, 'v0→current: physicsRules retired by v50');
   assert(p.boneConfig === null, 'v0→current: boneConfig added as null');
   assert(p.variantFadeRules === null, 'v0→current: variantFadeRules added as null');
   assert(p.eyeClosureConfig === null, 'v0→current: eyeClosureConfig added as null');

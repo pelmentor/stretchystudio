@@ -144,18 +144,23 @@ export function findReferences(project, paramId) {
     });
   }
 
-  // Physics inputs: rule.inputs[].paramId references parameters.
-  // (rule.outputs are bone group names — covered by Hole I-6 work.)
-  for (let ri = 0; ri < (project.physicsRules ?? []).length; ri++) {
-    const rule = project.physicsRules[ri];
-    const inputs = rule?.inputs;
-    if (!Array.isArray(inputs)) continue;
-    for (let ii = 0; ii < inputs.length; ii++) {
-      if (inputs[ii]?.paramId === paramId) {
-        report.physicsInputs.push({
-          kind: 'physicsInput',
-          location: `physicsRules[${ri}]:inputs[${ii}]`,
-        });
+  // Physics inputs: physicsModifier.inputs[].paramId references parameters.
+  // v50 (2026-06-08): modifiers live on `project.nodes[*].modifiers[]`.
+  for (let ni = 0; ni < (project.nodes ?? []).length; ni++) {
+    const node = project.nodes[ni];
+    if (!node || !Array.isArray(node.modifiers)) continue;
+    for (let mi = 0; mi < node.modifiers.length; mi++) {
+      const mod = node.modifiers[mi];
+      if (!mod || mod.type !== 'physicsModifier') continue;
+      const inputs = mod.inputs;
+      if (!Array.isArray(inputs)) continue;
+      for (let ii = 0; ii < inputs.length; ii++) {
+        if (inputs[ii]?.paramId === paramId) {
+          report.physicsInputs.push({
+            kind: 'physicsInput',
+            location: `nodes[${ni}]:modifiers[${mi}]:inputs[${ii}]`,
+          });
+        }
       }
     }
   }
@@ -203,9 +208,13 @@ export function findOrphanReferences(project) {
       if (b?.parameterId) referenced.add(b.parameterId);
     }
   }
-  for (const rule of project.physicsRules ?? []) {
-    for (const inp of rule?.inputs ?? []) {
-      if (inp?.paramId) referenced.add(inp.paramId);
+  for (const node of project.nodes ?? []) {
+    if (!Array.isArray(node?.modifiers)) continue;
+    for (const mod of node.modifiers) {
+      if (!mod || mod.type !== 'physicsModifier') continue;
+      for (const inp of mod.inputs ?? []) {
+        if (inp?.paramId) referenced.add(inp.paramId);
+      }
     }
   }
 

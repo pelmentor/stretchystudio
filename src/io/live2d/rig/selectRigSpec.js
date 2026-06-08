@@ -20,8 +20,9 @@
  *   - `warpDeformers`: built from `type:'deformer', deformerKind:'warp'`
  *     nodes — parent flat ids resolved back to RigSpec `{type, id}`
  *     pairs by looking up the parent node
- *   - `physicsRules`: `resolvePhysicsRules(project)` (already a derived
- *     selector — no work)
+ *   - `physicsRules`: `gatherPhysicsRules(project)` — gathers per-node
+ *     physicsModifier entries (v50, 2026-06-08) and re-merges by ruleId
+ *     into the legacy resolved-rule shape consumed by runtime/exporter
  *   - `canvas`: `{w: project.canvas.width, h: project.canvas.height}`
  *   - `canvasToInnermostX/Y`, `innermostBodyWarpId`: derived from the
  *     deepest body-warp node's `baseGrid` bbox
@@ -45,7 +46,7 @@
  * @module io/live2d/rig/selectRigSpec
  */
 
-import { resolvePhysicsRules } from './physicsConfig.js';
+import { gatherPhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 import {
@@ -253,7 +254,7 @@ function _buildRigSpec(project) {
     warpDeformers,
     rotationDeformers,
     artMeshes,
-    physicsRules: resolvePhysicsRules(project) ?? EMPTY_PHYSICS,
+    physicsRules: gatherPhysicsRules(project) ?? EMPTY_PHYSICS,
     canvas: { w, h },
     canvasToInnermostX,
     canvasToInnermostY,

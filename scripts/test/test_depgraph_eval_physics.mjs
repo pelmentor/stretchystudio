@@ -42,6 +42,23 @@ function assertNear(a, b, eps, name) {
   console.error(`FAIL: ${name} (|${a} - ${b}| > ${eps})`);
 }
 
+// The rule definition stays a const so tests that need the raw shape
+// (for `createPhysicsState` + `tickPhysics`) can use it directly. The
+// project wires it as a per-node physicsModifier (v50, 2026-06-08).
+const HAIR_RULE = {
+  id: 'hair-front',
+  inputs: [{ paramId: 'ParamAngleX', type: 'SRC_TO_G_ANGLE', weight: 100 }],
+  outputs: [{ paramId: 'ParamHairFrontX', kind: 'angle', scale: 1, vertexIndex: 2 }],
+  vertices: [
+    { x: 0, y: 0,  radius: 0,  mobility: 1, delay: 0.5, acceleration: 1.0 },
+    { x: 0, y: 15, radius: 15, mobility: 1, delay: 0.5, acceleration: 1.0 },
+    { x: 0, y: 30, radius: 15, mobility: 1, delay: 0.5, acceleration: 1.0 },
+  ],
+  gravity: { x: 0, y: 1 },
+  wind: { x: 0, y: 0 },
+  normalization: { angleMax: 10 },
+};
+
 function makeProject() {
   return {
     canvas: { width: 800, height: 600, x: 0, y: 0 },
@@ -49,24 +66,34 @@ function makeProject() {
       { id: 'ParamAngleX', default: 0 },
       { id: 'ParamHairFrontX', default: 0 },
     ],
-    nodes: [],
-    animations: [],
-    physicsRules: [
+    nodes: [
+      // v50 (2026-06-08): physics rules live as per-node modifiers on
+      // owner nodes; the depgraph kernel and tickPhysics both gather
+      // from `project.nodes[*].modifiers[]` (`gatherPhysicsRules`). Wire
+      // HAIR_RULE onto a root group so the kernel can find it.
       {
-        id: 'hair-front',
-        inputs: [{ paramId: 'ParamAngleX', type: 'SRC_TO_G_ANGLE', weight: 100 }],
-        outputs: [{ paramId: 'ParamHairFrontX', kind: 'angle', scale: 1, vertexIndex: 2 }],
-        vertices: [
-          { x: 0, y: 0,  radius: 0,  mobility: 1, delay: 0.5, acceleration: 1.0 },
-          { x: 0, y: 15, radius: 15, mobility: 1, delay: 0.5, acceleration: 1.0 },
-          { x: 0, y: 30, radius: 15, mobility: 1, delay: 0.5, acceleration: 1.0 },
-        ],
-        gravity: { x: 0, y: 1 },
-        wind: { x: 0, y: 0 },
-        normalization: { angleMax: 10 },
+        id: 'g_root', name: 'rig_root', type: 'group',
+        modifiers: [{
+          type: 'physicsModifier',
+          ruleId: HAIR_RULE.id,
+          name: HAIR_RULE.id,
+          category: 'hair',
+          inputs: HAIR_RULE.inputs.map((i) => ({ ...i })),
+          vertices: HAIR_RULE.vertices.map((v) => ({ ...v })),
+          normalization: { ...HAIR_RULE.normalization },
+          output: { ...HAIR_RULE.outputs[0] },
+          enabled: true,
+          mode: 7,
+          showInEditor: true,
+        }],
       },
     ],
+    animations: [],
   };
+}
+
+function hairRules() {
+  return [HAIR_RULE];
 }
 
 function paramSpecsForProject(project) {
@@ -80,24 +107,24 @@ function paramSpecsForProject(project) {
 // ---- Reference: direct tickPhysics, 60 warm frames + 1 sample frame ----
 
 function runDirectReference(project, paramInputs, dt) {
-  const state = createPhysicsState(project.physicsRules);
+  const state = createPhysicsState(hairRules());
   const paramSpecs = paramSpecsForProject(project);
   const paramValues = { ...paramInputs };
   // Warm: 60 frames at fixed dt.
   for (let f = 0; f < 60; f++) {
     paramValues.ParamAngleX = paramInputs.ParamAngleX;
-    tickPhysics(state, project.physicsRules, paramValues, paramSpecs, dt);
+    tickPhysics(state, hairRules(), paramValues, paramSpecs, dt);
   }
   // Sample frame.
   paramValues.ParamAngleX = paramInputs.ParamAngleX;
-  tickPhysics(state, project.physicsRules, paramValues, paramSpecs, dt);
+  tickPhysics(state, hairRules(), paramValues, paramSpecs, dt);
   return paramValues.ParamHairFrontX;
 }
 
 // ---- Depgraph eval: build once + 60 warm frames + 1 sample frame ----
 
 function runDepgraphEval(project, paramInputs, dt) {
-  const state = createPhysicsState(project.physicsRules);
+  const state = createPhysicsState(hairRules());
   const paramSpecs = paramSpecsForProject(project);
   const graph = buildDepGraph(project, {});
 
@@ -143,17 +170,17 @@ function runDepgraphEval(project, paramInputs, dt) {
 
 {
   const project = makeProject();
-  const state = createPhysicsState(project.physicsRules);
+  const state = createPhysicsState(hairRules());
   const paramSpecs = paramSpecsForProject(project);
   const dt = 1 / 60;
   const cold = { ...{ ParamAngleX: 15, ParamHairFrontX: 0 } };
-  tickPhysics(state, project.physicsRules, cold, paramSpecs, dt);
+  tickPhysics(state, hairRules(), cold, paramSpecs, dt);
   const coldOut = cold.ParamHairFrontX;
 
-  const warmState = createPhysicsState(project.physicsRules);
+  const warmState = createPhysicsState(hairRules());
   const warm = { ParamAngleX: 15, ParamHairFrontX: 0 };
   for (let f = 0; f < 60; f++) {
-    tickPhysics(warmState, project.physicsRules, warm, paramSpecs, dt);
+    tickPhysics(warmState, hairRules(), warm, paramSpecs, dt);
   }
   const warmOut = warm.ParamHairFrontX;
   // Cold-start has zero accumulator, no integration history; warm has 60×PHYSICS_DT

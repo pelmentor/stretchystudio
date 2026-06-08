@@ -28,6 +28,7 @@
  */
 
 import { tickPhysics } from '../../../io/live2d/runtime/physicsTick.js';
+import { gatherPhysicsRules } from '../../../io/live2d/rig/physicsConfig.js';
 
 /**
  * @param {import('../types.js').OperationNode} op
@@ -39,7 +40,11 @@ export function kernelPhysicsEval(op, ctx) {
   if (!ruleId) return null;
   const physics = /** @type {any} */ (ctx).physics;
   if (!physics?.state) return null;
-  const rule = ctx.project?.physicsRules?.find((r) => r?.id === ruleId);
+  // v50 (2026-06-08): rules live as per-node physicsModifier entries.
+  // Gather-and-find rather than carry a global field. gatherPhysicsRules
+  // is O(N nodes * M modifiers) but only runs once per physics op fire,
+  // which is fine for the depgraph's per-op tick budget.
+  const rule = gatherPhysicsRules(ctx.project ?? {}).find((r) => r?.id === ruleId);
   if (!rule) return null;
 
   // Build a paramValues bag from ctx.paramOverrides (the upstream

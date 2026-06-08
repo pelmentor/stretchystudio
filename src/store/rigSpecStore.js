@@ -8,7 +8,7 @@ import { useRigEvalStore } from './rigEvalStore.js';
 // gzip). The fast-path `selectRigSpec(project)` covers loaded projects
 // without needing the heavy harvest at all; the async path is the
 // fallback for fresh PSDs that haven't been Init-Rig'd yet.
-import { resolvePhysicsRules } from '../io/live2d/rig/physicsConfig.js';
+import { gatherPhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { sanitisePartName } from '../lib/partId.js';
 import { logger } from '../lib/logger.js';
@@ -106,7 +106,7 @@ export const useRigSpecStore = create((set, get) => ({
       let rigSpec = harvest.rigSpec ?? null;
       if (rigSpec) {
         const postSeedProject = useProjectStore.getState().project;
-        rigSpec = { ...rigSpec, physicsRules: resolvePhysicsRules(postSeedProject) };
+        rigSpec = { ...rigSpec, physicsRules: gatherPhysicsRules(postSeedProject) };
         _seedDefaultsForRig(rigSpec, postSeedProject);
       }
       set({

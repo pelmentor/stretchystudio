@@ -46,6 +46,7 @@ import {
   modifierRefId,
 } from '../../store/warpLatticeAccess.js';
 import { getMesh } from '../../store/objectDataAccess.js';
+import { gatherPhysicsRules } from '../../io/live2d/rig/physicsConfig.js';
 
 /** Synthetic IDNode ids for the depgraph's bookkeeping IDs. */
 export const TIME_ID_REF = '__time__';
@@ -165,12 +166,16 @@ export function buildNodes(graph, project, opts) {
     paramComp.addOperation(OperationCode.DRIVER_EVAL, param.id);
   }
 
-  // Physics rules — one PHYSICS_EVAL per rule. Input/output param
-  // wiring lands in pass 2.
-  if (Array.isArray(project.physicsRules) && project.physicsRules.length > 0) {
+  // Physics rules — one PHYSICS_EVAL per rule, gathered from per-node
+  // physicsModifier entries (v50, 2026-06-08). The gather merges sibling
+  // modifiers sharing a ruleId back into the resolved-rule shape so each
+  // pendulum runs ONCE per ruleId. Input/output param wiring lands in
+  // pass 2.
+  const physicsRules = gatherPhysicsRules(project);
+  if (physicsRules.length > 0) {
     const physicsId = graph.addIdNode('__physics__', 'physics');
     const physicsComp = physicsId.addComponent(NodeType.PARAMETERS);
-    for (const rule of project.physicsRules) {
+    for (const rule of physicsRules) {
       if (!rule?.id) continue;
       physicsComp.addOperation(OperationCode.PHYSICS_EVAL, rule.id);
     }
@@ -625,7 +630,7 @@ function buildPhysicsRelations(graph, project, opts) {
   const physicsComp = physicsId.findComponent(NodeType.PARAMETERS);
   if (!physicsComp) return;
   const paramComp = graph.findIdNode(PARAM_ID_REF, 'params')?.findComponent(NodeType.PARAMETERS);
-  for (const rule of project.physicsRules ?? []) {
+  for (const rule of gatherPhysicsRules(project)) {
     if (!rule?.id) continue;
     const physicsOp = physicsComp.findOperation(OperationCode.PHYSICS_EVAL, rule.id);
     if (!physicsOp) continue;

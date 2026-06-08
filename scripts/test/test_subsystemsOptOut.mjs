@@ -10,8 +10,7 @@
 //         STAY in the map but their partIds land in disabledTargetPartIds.
 //         (Pre-2026-06-08 the harvest STRIPPED them — empty modifiers[]
 //         caused I-1/I-21 "part renders at canvas origin" violations.)
-//   - filterPhysicsRulesBySubsystems drops rules by name-prefix
-//   - seedPhysicsRules respects subsystem flags
+//   - seedPhysicsModifiers respects subsystem flags (category-based)
 //   - seedRigWarps writes leaf modifier with enabled:false for partIds
 //     in the disabledTargetPartIds Set (Blender modifier-toggle parity)
 //
@@ -23,9 +22,8 @@ import {
 } from '../../src/io/live2d/rig/autoRigConfig.js';
 import {
   harvestSeedFromRigSpec,
-  filterPhysicsRulesBySubsystems,
 } from '../../src/io/live2d/rig/initRig.js';
-import { seedPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
+import { seedPhysicsModifiers, gatherPhysicsRules } from '../../src/io/live2d/rig/physicsConfig.js';
 import { seedRigWarps } from '../../src/io/live2d/rig/rigWarpsStore.js';
 
 let passed = 0;
@@ -271,45 +269,28 @@ function mkWarpSpec({ id, targetPartId, parent = { type: 'warp', id: 'BodyXWarp'
     'combined: mouth NOT flagged (mouthRig still on)');
 }
 
-// ── filterPhysicsRulesBySubsystems ─────────────────────────────────
+// ── seedPhysicsModifiers respects subsystem opt-out (category-based) ─
 {
-  const rules = [
-    { name: 'hair-front-1' },
-    { name: 'hair-back-1' },
-    { name: 'clothing-skirt' },
-    { name: 'arm-leftElbow' },
-    { name: 'breath' },
-    { name: 'unknown-rule' },
-  ];
-
-  const f1 = filterPhysicsRulesBySubsystems(rules, { hairRig: false });
-  assert(f1.length === 4, 'hairRig=false drops 2 hair rules');
-  assert(!f1.some(r => r.name.startsWith('hair-')), 'hairRig=false drops all hair-* rules');
-
-  const f2 = filterPhysicsRulesBySubsystems(rules, { clothingRig: false });
-  assert(!f2.some(r => r.name === 'clothing-skirt'), 'clothingRig=false drops clothing rule');
-
-  const f3 = filterPhysicsRulesBySubsystems(rules, { armPhysics: false });
-  assert(!f3.some(r => r.name.includes('elbow')), 'armPhysics=false drops elbow rule');
-
-  const f4 = filterPhysicsRulesBySubsystems(rules, { bodyWarps: false });
-  assert(!f4.some(r => r.name === 'breath'), 'bodyWarps=false drops breath');
-
-  const f5 = filterPhysicsRulesBySubsystems(rules, {
-    hairRig: false, clothingRig: false, armPhysics: false, bodyWarps: false,
-  });
-  assert(f5.length === 1 && f5[0].name === 'unknown-rule', 'unknown-rule survives all opt-outs');
-}
-
-// ── seedPhysicsRules respects subsystems ───────────────────────────
-{
+  // v50: physics modifiers seed per-node. hairRig=false → no rule with
+  // `category: 'hair'` seeds any modifier on any node. We assert by
+  // gathering the rules back from the project: gather() merges per-node
+  // modifiers into the legacy rule shape. Empty hair → zero hair rules.
   const project = {
-    nodes: [{ id: 'g-hair-front', name: 'front hair', type: 'group' }],
+    nodes: [
+      { id: 'p-front-hair', name: 'front hair', type: 'part' },
+      { id: 'p-shirt',      name: 'topwear',     type: 'part' },
+    ],
     autoRigConfig: { subsystems: { hairRig: false } },
   };
-  seedPhysicsRules(project);
-  const hairRules = (project.physicsRules ?? []).filter(r => r?.name?.startsWith('hair-'));
-  assert(hairRules.length === 0, 'seedPhysicsRules with hairRig=false produces no hair rules');
+  seedPhysicsModifiers(project);
+  const rules = gatherPhysicsRules(project);
+  const hairRules = rules.filter(r => r.category === 'hair');
+  assert(hairRules.length === 0,
+    'seedPhysicsModifiers with hairRig=false produces no hair-category modifiers');
+  // Clothing still seeds onto the shirt part (Shirt rule).
+  const clothingRules = rules.filter(r => r.category === 'clothing');
+  assert(clothingRules.length > 0,
+    'seedPhysicsModifiers with hairRig=false still seeds clothing modifiers');
 }
 
 // ── No-opts-set fallback: harvest behaves as before ────────────────

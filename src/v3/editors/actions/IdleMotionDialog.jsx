@@ -86,11 +86,14 @@ export function IdleMotionDialog({ open, onOpenChange }) {
       }
 
       // Physics outputs must NEVER be animated — they're driven by the
-      // physics tick. Pull from project.physicsRules (resolved shape).
+      // physics tick. v50 (2026-06-08): pull from per-node physicsModifier
+      // entries on project.nodes; each modifier has a single output.
       const physicsOutputIds = new Set();
-      for (const rule of project.physicsRules ?? []) {
-        for (const out of rule.outputs ?? []) {
-          if (out?.paramId) physicsOutputIds.add(out.paramId);
+      for (const node of project.nodes ?? []) {
+        if (!Array.isArray(node?.modifiers)) continue;
+        for (const mod of node.modifiers) {
+          if (!mod || mod.type !== 'physicsModifier') continue;
+          if (mod.output?.paramId) physicsOutputIds.add(mod.output.paramId);
         }
       }
 
