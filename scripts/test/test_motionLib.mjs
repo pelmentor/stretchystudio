@@ -15,6 +15,7 @@ import {
   clampKeyframes,
   applyPersonality,
 } from '../../src/io/live2d/idle/motionLib.js';
+import { encodeKeyframesToSegments } from '../../src/io/live2d/motion3json.js';
 
 let passed = 0;
 let failed = 0;
@@ -123,16 +124,16 @@ function near(a, b, eps = 1e-6) {
 
 {
   const kfs = [
-    { time: 0,    value: -5, easing: 'linear' },
-    { time: 100,  value:  3, easing: 'linear' },
-    { time: 200,  value: 15, easing: 'linear' },
+    { time: 0,    value: -5, interpolation: 'linear' },
+    { time: 100,  value:  3, interpolation: 'linear' },
+    { time: 200,  value: 15, interpolation: 'linear' },
   ];
   const clamped = clampKeyframes(kfs, 0, 10);
   assert(clamped[0].value === 0,  'clamp: -5 → 0');
   assert(clamped[1].value === 3,  'clamp: in-range preserved');
   assert(clamped[2].value === 10, 'clamp: 15 → 10');
   assert(clamped[0].time === 0,   'clamp: time preserved');
-  assert(clamped[0].easing === 'linear', 'clamp: easing preserved');
+  assert(clamped[0].interpolation === 'linear', 'clamp: interpolation preserved');
   // Original not mutated
   assert(kfs[0].value === -5, 'clamp: input unmodified');
 }
@@ -168,6 +169,64 @@ function near(a, b, eps = 1e-6) {
 
   // Input not mutated
   assert(base.amplitude === 1, 'personality: input unchanged');
+}
+
+// ── genSine emits bezier handles (smooth-playback regression) ────────
+
+{
+  const kfs = genSine({ durationMs: 4000, amplitude: 1, period: 2000, mid: 0 });
+  // Every keyframe carries bezier interpolation + analytical handles
+  let allBezier = true;
+  for (const kf of kfs) {
+    if (kf.interpolation !== 'bezier') { allBezier = false; break; }
+    if (!kf.handleLeft || !kf.handleRight) { allBezier = false; break; }
+  }
+  assert(allBezier, 'genSine: every kf has interpolation=bezier + L/R handles');
+
+  // Handle slope at t≈0 should match analytical cosine derivative.
+  // v = sin(ωt), dv/dt = ω·cos(ωt). At t=0: dv/dt = ω = 2π/2000.
+  // Handle offset = (D/N)/3. genSine uses N = max(8, cycles*12) = 24
+  // (cycles=2). dt = 4000/24, handleOff = dt/3 ≈ 55.56ms.
+  // Expected handleRight.value at t=0: 0 + ω·handleOff
+  //                                    = (2π/2000) · (4000/72)
+  //                                    = 8π/2880 ≈ 0.1745
+  const kf0 = kfs[0];
+  const expectedHRValue = (2 * Math.PI / 2000) * (4000 / 24 / 3);
+  assert(near(kf0.handleRight.value, expectedHRValue, 1e-6),
+    'genSine: t=0 handleRight matches analytical derivative');
+  assert(near(kf0.handleLeft.value, -expectedHRValue, 1e-6),
+    'genSine: t=0 handleLeft mirrors derivative across t');
+
+  // End-to-end: motion3 encoder emits TYPE-1 (bezier) segments, not LINEAR.
+  // Pre-fix every segment was type 0 (linear) because motionLib used the
+  // `easing` field which the encoder doesn't read.
+  const segments = encodeKeyframesToSegments(kfs, 4);
+  // segments[0,1] = (t0, v0), then triples/septets per segment.
+  let i = 2;
+  let bezierCount = 0, linearCount = 0;
+  while (i < segments.length) {
+    const type = segments[i];
+    if (type === 1) { bezierCount++; i += 7; }
+    else            { linearCount++; i += 3; }
+  }
+  assert(bezierCount > 0, 'encoder: genSine produces bezier segments');
+  assert(linearCount === 0, 'encoder: NO linear segments in pure sine motion');
+}
+
+// ── genWander emits bezier handles ───────────────────────────────────
+
+{
+  const kfs = genWander({ durationMs: 2000, amplitude: 0.5, harmonics: 3, seed: 42 });
+  let allBezier = true;
+  for (const kf of kfs) {
+    if (kf.interpolation !== 'bezier'
+        || !kf.handleLeft || !kf.handleRight) { allBezier = false; break; }
+  }
+  assert(allBezier, 'genWander: every kf has bezier + handles');
+
+  // Loop-safety post-bezier: first/last handles still pin first/last value
+  assert(near(kfs[0].value, kfs[kfs.length - 1].value, 1e-9),
+    'genWander: loop-safe value after bezier emission');
 }
 
 console.log(`motionLib: ${passed} passed, ${failed} failed`);

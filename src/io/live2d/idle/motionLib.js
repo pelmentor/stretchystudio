@@ -1,9 +1,14 @@
 /**
  * Procedural curve generators for idle motion3.json synthesis.
  *
- * Each generator returns an array of `{time: ms, value, easing}` keyframes
- * which feeds directly into `encodeKeyframesToSegments` from
- * `src/io/live2d/motion3json.js`.
+ * Each generator returns an array of `{time: ms, value, interpolation, ...}`
+ * keyframes which feeds directly into `encodeKeyframesToSegments` from
+ * `src/io/live2d/motion3json.js`. The `interpolation` field is the same
+ * one the SS animation pipeline uses (linear / bezier / constant / named
+ * easings) — using it lets analytical generators (sine, wander) emit true
+ * bezier handles so Cubism plays them with curved, not piecewise-linear,
+ * segments. Without it every segment baked to linear and the user saw
+ * visible "blocky" steps even on a slow breath curve.
  *
  * Loop-safety contract: every generator MUST emit `value(t=0) === value(t=durationMs)`
  * so that motion3.json with `Loop: true` plays seamlessly.
@@ -34,8 +39,8 @@ const TWO_PI = Math.PI * 2;
  */
 export function genConstant({ durationMs, value }) {
   return [
-    { time: 0, value, easing: 'linear' },
-    { time: durationMs, value, easing: 'linear' },
+    { time: 0, value, interpolation: 'linear' },
+    { time: durationMs, value, interpolation: 'linear' },
   ];
 }
 
@@ -43,20 +48,47 @@ export function genConstant({ durationMs, value }) {
  * Sine curve — `value = mid + amplitude * sin(2π t / period + phase)`.
  * Period must divide durationMs evenly for loop safety; we enforce by snapping
  * to the closest integer cycle count.
+ *
+ * Emits BEZIER keyframes with analytical handle tangents derived from the
+ * cosine derivative `dv/dt = amplitude * ω * cos(ω t + φ)`. Each handle sits
+ * at `±δ/3` along the time axis with value offset `dv/dt · δ/3` (hermite-to-
+ * bezier conversion at 1/3 segment), giving Cubism enough information to
+ * play a true sine, not a polygonal approximation. With this every sample
+ * still lands exactly on the sine but the SEGMENTS between samples curve
+ * through the analytic shape — no visible polygon edges at peaks.
  */
 export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, samples = 0 }) {
   const D = durationMs;
   const cycles = Math.max(1, Math.round(D / period));
   const snappedPeriod = D / cycles;
+  const omega = TWO_PI / snappedPeriod;
 
   const N = samples > 0 ? samples : Math.max(8, cycles * 12);
+  const dt = D / N;
+  const handleOff = dt / 3;
   const kfs = [];
   for (let i = 0; i <= N; i++) {
-    const t = (i / N) * D;
-    const v = mid + amplitude * Math.sin((TWO_PI * t) / snappedPeriod + phase);
-    kfs.push({ time: t, value: v, easing: 'linear' });
+    const t = i * dt;
+    const v = mid + amplitude * Math.sin(omega * t + phase);
+    const dvdt = amplitude * omega * Math.cos(omega * t + phase);
+    kfs.push({
+      time: t,
+      value: v,
+      interpolation: 'bezier',
+      handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
+      handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
+    });
   }
-  kfs[kfs.length - 1].value = kfs[0].value;
+  // Loop-safety: pin the last keyframe's value (and its left handle) to the
+  // first. Periodicity already guarantees identity to fp32 precision, but
+  // explicit pin removes any rounding drift across cycles*N samples.
+  const first = kfs[0];
+  const last = kfs[kfs.length - 1];
+  last.value = first.value;
+  last.handleLeft = {
+    time: last.time - handleOff,
+    value: first.value - (amplitude * omega * Math.cos(phase)) * handleOff,
+  };
   return kfs;
 }
 
@@ -74,22 +106,53 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
     const w = 1 / k;
     const a = w * (0.5 + rng());
     const phi = rng() * TWO_PI;
-    comps.push({ k, a, phi });
+    // Pre-compute the per-component angular frequency so the eval +
+    // derivative loops below don't re-derive 2π·k/D for every sample.
+    comps.push({ k, a, phi, omega: (TWO_PI * k) / D });
   }
   const ampSum = comps.reduce((s, c) => s + c.a, 0);
   const norm = ampSum > 0 ? 1 / ampSum : 1;
 
+  // Bezier handles emitted from the analytical sum-of-harmonics derivative:
+  // dv/dt = amplitude * norm * Σ c.a · c.omega · cos(c.omega · t + c.phi).
+  // Same hermite-to-bezier rule as genSine — handle at ±δ/3 with value
+  // offset dv/dt · δ/3. Result: Cubism plays a smooth multi-harmonic
+  // wander instead of a 24-sided polygon.
+  const dt = D / samples;
+  const handleOff = dt / 3;
   const kfs = [];
   for (let i = 0; i <= samples; i++) {
-    const t = (i / samples) * D;
-    let v = 0;
+    const t = i * dt;
+    let v = 0, dvdt = 0;
     for (const c of comps) {
-      v += c.a * Math.sin((TWO_PI * c.k * t) / D + c.phi);
+      const arg = c.omega * t + c.phi;
+      v    += c.a * Math.sin(arg);
+      dvdt += c.a * c.omega * Math.cos(arg);
     }
     v = mid + amplitude * v * norm;
-    kfs.push({ time: t, value: v, easing: 'linear' });
+    dvdt = amplitude * dvdt * norm;
+    kfs.push({
+      time: t,
+      value: v,
+      interpolation: 'bezier',
+      handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
+      handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
+    });
   }
-  kfs[kfs.length - 1].value = kfs[0].value;
+  // Loop-safety: pin t=D value/left-handle to t=0 derivatives. Each harmonic
+  // completes an integer number of cycles over D so the analytic value+
+  // derivative at t=D already equals t=0 to fp32 precision; explicit pin
+  // removes any drift accumulated across `samples` evaluations.
+  const first = kfs[0];
+  const last = kfs[kfs.length - 1];
+  last.value = first.value;
+  let dvdt0 = 0;
+  for (const c of comps) dvdt0 += c.a * c.omega * Math.cos(c.phi);
+  dvdt0 = amplitude * dvdt0 * norm;
+  last.handleLeft = {
+    time: last.time - handleOff,
+    value: first.value - dvdt0 * handleOff,
+  };
   return kfs;
 }
 
@@ -123,18 +186,18 @@ export function genBlink({
   }
 
   const kfs = [
-    { time: 0, value: openValue, easing: 'linear' },
+    { time: 0, value: openValue, interpolation: 'linear' },
   ];
 
   for (const bt of blinkTimes) {
     const halfClose = closedDurationMs / 2;
-    kfs.push({ time: bt - halfClose - 30, value: openValue, easing: 'linear' });
-    kfs.push({ time: bt - halfClose,      value: closedValue, easing: 'linear' });
-    kfs.push({ time: bt + halfClose,      value: closedValue, easing: 'linear' });
-    kfs.push({ time: bt + halfClose + 30, value: openValue, easing: 'linear' });
+    kfs.push({ time: bt - halfClose - 30, value: openValue, interpolation: 'linear' });
+    kfs.push({ time: bt - halfClose,      value: closedValue, interpolation: 'linear' });
+    kfs.push({ time: bt + halfClose,      value: closedValue, interpolation: 'linear' });
+    kfs.push({ time: bt + halfClose + 30, value: openValue, interpolation: 'linear' });
   }
 
-  kfs.push({ time: D, value: openValue, easing: 'linear' });
+  kfs.push({ time: D, value: openValue, interpolation: 'linear' });
 
   kfs.sort((a, b) => a.time - b.time);
   return kfs;
@@ -175,21 +238,24 @@ export function genBurst({
     t += Math.max(minSpacing, intervalAvgMs + jitter);
   }
 
-  const kfs = [{ time: 0, value: restValue, easing: 'linear' }];
+  const kfs = [{ time: 0, value: restValue, interpolation: 'linear' }];
   const halfPulse = pulseDurationMs / 2;
   const quarterPulse = pulseDurationMs / 4;
   const midValue = restValue + (peakValue - restValue) * 0.5;
 
   for (const bt of burstTimes) {
-    // Peak is at bt; pulse runs from bt-halfPulse to bt+halfPulse
-    kfs.push({ time: bt - halfPulse - 1,    value: restValue, easing: 'linear' });
-    kfs.push({ time: bt - quarterPulse,     value: midValue,  easing: 'ease-in-out' });
-    kfs.push({ time: bt,                    value: peakValue, easing: 'ease-in-out' });
-    kfs.push({ time: bt + quarterPulse,     value: midValue,  easing: 'ease-in-out' });
-    kfs.push({ time: bt + halfPulse + 1,    value: restValue, easing: 'linear' });
+    // Peak is at bt; pulse runs from bt-halfPulse to bt+halfPulse. The
+    // approach/decay use 'cubic' (NAMED_EASING) so the encoder bakes
+    // each segment into 16 linear sub-samples — Cubism plays it as a
+    // smooth ease-in-out nod, not a sharp triangular pulse.
+    kfs.push({ time: bt - halfPulse - 1,    value: restValue, interpolation: 'linear' });
+    kfs.push({ time: bt - quarterPulse,     value: midValue,  interpolation: 'cubic' });
+    kfs.push({ time: bt,                    value: peakValue, interpolation: 'cubic' });
+    kfs.push({ time: bt + quarterPulse,     value: midValue,  interpolation: 'cubic' });
+    kfs.push({ time: bt + halfPulse + 1,    value: restValue, interpolation: 'linear' });
   }
 
-  kfs.push({ time: D, value: restValue, easing: 'linear' });
+  kfs.push({ time: D, value: restValue, interpolation: 'linear' });
   kfs.sort((a, b) => a.time - b.time);
   return kfs;
 }
@@ -216,16 +282,19 @@ export function genSyllables({
   const D = durationMs;
   const rng = makeRng(seed);
 
-  const kfs = [{ time: 0, value: restValue, easing: 'linear' }];
+  const kfs = [{ time: 0, value: restValue, interpolation: 'linear' }];
   let t = edgeBufferMs + rng() * intervalAvgMs;
 
   while (t < D - edgeBufferMs - syllableDurationMs) {
     const peak = peakMin + rng() * (peakMax - peakMin);
     const halfDur = syllableDurationMs / 2;
 
-    kfs.push({ time: t,                value: restValue, easing: 'linear' });
-    kfs.push({ time: t + halfDur,      value: peak,      easing: 'ease-in-out' });
-    kfs.push({ time: t + syllableDurationMs, value: restValue, easing: 'ease-in-out' });
+    kfs.push({ time: t,                value: restValue, interpolation: 'linear' });
+    // Approach + decay use 'cubic' (NAMED_EASING) so the encoder bakes
+    // each segment into 16 sub-samples — smooth mouth pulse instead of a
+    // sharp triangle. Same pattern as genBurst.
+    kfs.push({ time: t + halfDur,      value: peak,      interpolation: 'cubic' });
+    kfs.push({ time: t + syllableDurationMs, value: restValue, interpolation: 'cubic' });
 
     // Advance: syllable duration + gap. Occasional longer pause = sentence boundary.
     const gap = rng() < pauseProbability
@@ -234,7 +303,7 @@ export function genSyllables({
     t += syllableDurationMs + gap;
   }
 
-  kfs.push({ time: D, value: restValue, easing: 'linear' });
+  kfs.push({ time: D, value: restValue, interpolation: 'linear' });
   kfs.sort((a, b) => a.time - b.time);
   return kfs;
 }
