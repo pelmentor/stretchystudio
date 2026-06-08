@@ -103,6 +103,13 @@ export function buildMeshBindingPlan(opts) {
     const mesh = part.mesh;
     const boneWeights = mesh?.boneWeights ?? null;
     const jointBoneId = mesh?.jointBoneId ?? null;
+    // Keyform opacity values are hardcoded per branch to match cmo3 emit
+    // (artMeshSourceEmit.js — bone-baked / eye-closure / default all emit
+    // opacity 1.0; variant fade-in emits 0→1; base fade-out emits 1→0).
+    // Reading `part.opacity` here would break the variant fade ramp: v49
+    // sets `variant.opacity = 0` as a runtime-rest marker (so depgraph
+    // blends correctly at slider=0), but the FADE ENDPOINT at slider=1
+    // must be 1.0 — same authored peak as cmo3 ships.
     if (boneWeights && jointBoneId) {
       // Bone-baked keyforms.
       const boneGroup = groups.find(g => g.id === jointBoneId);
@@ -129,7 +136,7 @@ export function buildMeshBindingPlan(opts) {
       return {
         paramId: `ParamRotation_${sanitizedBoneName}`,
         keys: BONE_KEYFORM_ANGLES.slice(),
-        keyformOpacities: BONE_KEYFORM_ANGLES.map(() => part.opacity ?? 1),
+        keyformOpacities: BONE_KEYFORM_ANGLES.map(() => 1),
         perVertexPositions: perKeyformPositions,
       };
     }
@@ -151,11 +158,14 @@ export function buildMeshBindingPlan(opts) {
       return {
         paramId: closureParam,
         keys: [0, 1],
-        keyformOpacities: [part.opacity ?? 1, part.opacity ?? 1],
+        keyformOpacities: [1, 1],
         perVertexPositions: [closedPositions, restPositions],
       };
     }
-    // Variant mesh fade-in: opacity 0 at Param<Suffix>=0, recorded at =1.
+    // Variant mesh fade-in: opacity 0 at Param<Suffix>=0, 1 at =1.
+    // The runtime rest opacity (v49 sets variant.opacity=0 to make it
+    // invisible at slider=0) is recreated by THIS keyform plan at runtime
+    // — not by leaking part.opacity into the peak.
     const variantSuffix = part.variantSuffix ?? null;
     if (variantSuffix) {
       const pid = variantParamId(variantSuffix);
@@ -163,7 +173,7 @@ export function buildMeshBindingPlan(opts) {
         return {
           paramId: pid,
           keys: [0, 1],
-          keyformOpacities: [0, part.opacity ?? 1],
+          keyformOpacities: [0, 1],
           perVertexPositions: null,
         };
       }
@@ -180,16 +190,16 @@ export function buildMeshBindingPlan(opts) {
         return {
           paramId: pid,
           keys: [0, 1],
-          keyformOpacities: [part.opacity ?? 1, 0],
+          keyformOpacities: [1, 0],
           perVertexPositions: null,
         };
       }
     }
-    // Default: 1 keyform on ParamOpacity[1.0] at recorded opacity.
+    // Default: 1 keyform on ParamOpacity[1.0].
     return {
       paramId: 'ParamOpacity',
       keys: [1],
-      keyformOpacities: [part.opacity ?? 1],
+      keyformOpacities: [1],
       perVertexPositions: null,
     };
   });
