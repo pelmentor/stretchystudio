@@ -82,7 +82,7 @@ import {
   computeSmartMeshOpts,
   zoomAroundCursor,
 } from '@/components/canvas/viewport/helpers';
-import { hitTestParts, hitTestVertices, buildVertexAdjacency, shortestPathBetweenVertices } from '@/io/hitTest';
+import { hitTestParts, hitTestPartsAll, cycleHitsAfterActive, hitTestVertices, buildVertexAdjacency, shortestPathBetweenVertices } from '@/io/hitTest';
 import { meshSignature, signaturesEqual } from '@/io/meshSignature';
 import { captureExportFrame as captureExportFrameImpl } from '@/components/canvas/viewport/captureExportFrame';
 import {
@@ -391,6 +391,13 @@ export default function CanvasViewport({
   // geometry the renderer just drew. Without this, a click on a
   // posed limb falls through because hit-test sees the rest mesh.
   const lastFinalVertsRef = useRef(/** @type {Map<string, Array<{x:number,y:number}>>} */(new Map()));
+  // Blender-parity click-cycle through overlapping parts. When the user
+  // clicks at (~) the same screen position as the previous click, advance
+  // to the next part behind the currently active one. Reset state is
+  // implicit: a click whose screen distance from `clientX/Y` exceeds the
+  // threshold gets treated as a fresh pick (top-of-stack). Matches
+  // `view3d_select.cc:2384-2391` (mouse_select_eval_buffer cycle logic).
+  const clickCycleRef = useRef(/** @type {{clientX:number, clientY:number} | null} */(null));
   // BUG-015 instrumentation — throttle for the BodyAngle eval-watch log.
   const lastBodyAngleLogTimestampRef = useRef(0);
   // Toolset Phase 1.B — lasso candidate state (deferred Ctrl+LMB).
@@ -3060,26 +3067,42 @@ export default function CanvasViewport({
     // — the meshEditActive block above handles mesh/blendShape vertex
     // drag, the skeleton-overlay branch above handles bone joints.
     //
-    // Frames may be null when no rig is built yet; hitTestParts
+    // Frames may be null when no rig is built yet; hitTest*
     // falls back to rest mesh + worldMatrices.
+    //
+    // Blender-parity cycle-pick: when this click is at (~) the same
+    // screen position as the previous one and is a plain (non-Shift)
+    // select, gather ALL hits and rotate to the next part behind the
+    // currently active one. A click further than the 4-px² threshold
+    // resets to top-of-stack (Blender's WM_EVENT_CURSOR_MOTION_THRESHOLD).
     const cachedFrames = lastEvalCacheRef.current?.frames ?? null;
-    const hitId = hitTestParts(
-      proj,
-      cachedFrames,
-      worldX,
-      worldY,
-      {
-        worldMatrices,
-        imageDataMap: imageDataMapRef.current,
-        // Final per-part verts the renderer last drew. Includes
-        // chainEval + two-bone LBS + blend shapes — i.e. what the
-        // user actually sees. Hit-test prefers these over chainEval
-        // frames so a posed limb is selectable at its visible
-        // location (BUG-026 fix, 2026-05-08).
-        finalVertsByPartId: lastFinalVertsRef.current,
-      },
-    );
     const isMulti = e.shiftKey;
+    const hitOpts = {
+      worldMatrices,
+      imageDataMap: imageDataMapRef.current,
+      // Final per-part verts the renderer last drew. Includes
+      // chainEval + two-bone LBS + blend shapes — i.e. what the
+      // user actually sees. Hit-test prefers these over chainEval
+      // frames so a posed limb is selectable at its visible
+      // location (BUG-026 fix, 2026-05-08).
+      finalVertsByPartId: lastFinalVertsRef.current,
+    };
+
+    let hitId = null;
+    const prevClick = clickCycleRef.current;
+    const sameSpot = !isMulti && prevClick
+      && ((e.clientX - prevClick.clientX) ** 2 + (e.clientY - prevClick.clientY) ** 2) <= 16;
+    if (sameSpot) {
+      const allHits = hitTestPartsAll(proj, cachedFrames, worldX, worldY, hitOpts);
+      if (allHits.length > 0) {
+        const activeRef = useSelectionStore.getState().getActive();
+        const activeId = activeRef && activeRef.type === 'part' ? activeRef.id : null;
+        hitId = cycleHitsAfterActive(allHits, activeId);
+      }
+    } else {
+      hitId = hitTestParts(proj, cachedFrames, worldX, worldY, hitOpts);
+    }
+
     if (hitId) {
       if (isMulti) {
         useSelectionStore.getState().select({ type: 'part', id: hitId }, 'toggle');
@@ -3093,9 +3116,11 @@ export default function CanvasViewport({
         setSelection([hitId]);
         useSelectionStore.getState().select({ type: 'part', id: hitId }, 'replace');
       }
+      clickCycleRef.current = { clientX: e.clientX, clientY: e.clientY };
     } else if (!isMulti) {
       setSelection([]);
       useSelectionStore.getState().clear();
+      clickCycleRef.current = null;
     }
   }, [setSelection, updateProject]);
 

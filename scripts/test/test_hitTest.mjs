@@ -2,7 +2,7 @@
 //
 // Run: node scripts/test/test_hitTest.mjs
 
-import { hitTestParts, pointInTriangle } from '../../src/io/hitTest.js';
+import { hitTestParts, hitTestPartsAll, cycleHitsAfterActive, pointInTriangle } from '../../src/io/hitTest.js';
 
 let passed = 0;
 let failed = 0;
@@ -263,6 +263,55 @@ function makeAlphaMaskRecord(box) {
   // face bbox (20..80, 20..80) contains it; hair bbox (10..50, 5..40)
   // does NOT contain (60, 35) — x=60 > 50. So result must be face.
   assert(hitTestParts(project, [], 60, 35) === 'face', 'bbox: outside hair → fall through to face');
+}
+
+// ── hitTestPartsAll: depth-sorted hit list (Blender cycle-pick parity) ──
+
+{
+  const project = {
+    nodes: [
+      makeSquarePart('A', 0, 0, 0),     // back
+      makeSquarePart('B', 1, 5, 5),     // mid — overlaps A in (5..10, 5..10)
+      makeSquarePart('C', 2, 8, 8),     // front — overlaps both at (8..10, 8..10)
+    ],
+  };
+  // 3-way overlap → all three IDs, topmost first
+  const triple = hitTestPartsAll(project, [], 9, 9);
+  assert(triple.length === 3, 'all hits: triple overlap count');
+  assert(triple[0] === 'C' && triple[1] === 'B' && triple[2] === 'A',
+    'all hits: topmost first (C, B, A)');
+  // 2-way overlap → two IDs
+  const dual = hitTestPartsAll(project, [], 6, 6);
+  assert(dual.length === 2 && dual[0] === 'B' && dual[1] === 'A',
+    'all hits: 2-way overlap → [B, A]');
+  // Single hit → length 1
+  const single = hitTestPartsAll(project, [], 2, 2);
+  assert(single.length === 1 && single[0] === 'A', 'all hits: single hit');
+  // Empty
+  assert(hitTestPartsAll(project, [], 100, 100).length === 0, 'all hits: empty');
+}
+
+// ── cycleHitsAfterActive ────────────────────────────────────────────
+
+{
+  // From Blender mouse_select_eval_buffer (view3d_select.cc:2384-2391):
+  // pick the entry AFTER the active id, wrapping around. If active is
+  // not in the list (or null), return the topmost.
+  assert(cycleHitsAfterActive(['C', 'B', 'A'], 'C') === 'B',
+    'cycle: C → B');
+  assert(cycleHitsAfterActive(['C', 'B', 'A'], 'B') === 'A',
+    'cycle: B → A');
+  assert(cycleHitsAfterActive(['C', 'B', 'A'], 'A') === 'C',
+    'cycle: A wraps to C (top)');
+  assert(cycleHitsAfterActive(['C', 'B', 'A'], null) === 'C',
+    'cycle: null active → topmost');
+  assert(cycleHitsAfterActive(['C', 'B', 'A'], 'Z') === 'C',
+    'cycle: active not in list → topmost');
+  assert(cycleHitsAfterActive([], 'A') === null, 'cycle: empty list → null');
+  assert(cycleHitsAfterActive(['X'], 'X') === 'X',
+    'cycle: 1-elem list with active → same elem');
+  assert(cycleHitsAfterActive(['X'], null) === 'X',
+    'cycle: 1-elem list with no active → that elem');
 }
 
 console.log(`hitTest: ${passed} passed, ${failed} failed`);

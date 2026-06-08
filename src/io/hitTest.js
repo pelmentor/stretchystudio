@@ -149,6 +149,43 @@ function pointInAnyTriangleObjs(verts, tris, px, py) {
  * @returns {string | null}
  */
 export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
+  const all = _collectHits(project, frames, worldX, worldY, opts, /* stopAtFirst */ true);
+  return all.length > 0 ? all[0] : null;
+}
+
+/**
+ * Like `hitTestParts` but returns ALL hit part ids in front-to-back order
+ * (topmost first, sorted by descending `draw_order`).
+ *
+ * Used by the "click again to cycle through overlapping parts" gesture
+ * (Blender's `view3d_select` mouse_select_eval_buffer — successive clicks
+ * at the same position rotate through depth-sorted hits). Caller maintains
+ * the cycle index against the active selection and reset state.
+ *
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
+ * @param {number} worldX
+ * @param {number} worldY
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, import('../components/canvas/viewport/alphaMask.js').AlphaMaskRecord> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} [opts]
+ * @returns {string[]}
+ */
+export function hitTestPartsAll(project, frames, worldX, worldY, opts = {}) {
+  return _collectHits(project, frames, worldX, worldY, opts, /* stopAtFirst */ false);
+}
+
+/**
+ * Shared per-part walk used by `hitTestParts` (stops at first hit) and
+ * `hitTestPartsAll` (collects all hits in draw-order desc).
+ *
+ * @param {{nodes?: ReadonlyArray<any>}} project
+ * @param {ReadonlyArray<{id?: string, vertexPositions?: Float32Array | number[]}> | null | undefined} frames
+ * @param {number} worldX
+ * @param {number} worldY
+ * @param {{worldMatrices?: Map<string, Float32Array | number[]> | null, imageDataMap?: Map<string, import('../components/canvas/viewport/alphaMask.js').AlphaMaskRecord> | null, finalVertsByPartId?: Map<string, ReadonlyArray<{x:number,y:number}>> | null}} opts
+ * @param {boolean} stopAtFirst
+ * @returns {string[]}
+ */
+function _collectHits(project, frames, worldX, worldY, opts, stopAtFirst) {
   /** @type {Map<string, Float32Array | number[]>} */
   const frameMap = new Map();
   if (frames && typeof frames[Symbol.iterator] === 'function') {
@@ -162,10 +199,6 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   const imageDataMap = opts.imageDataMap ?? null;
   const finalVertsByPartId = opts.finalVertsByPartId ?? null;
 
-  // Include parts with a triangulated mesh OR raw image-only parts (no
-  // mesh yet — e.g. fresh PSD imports during the wizard's Reorder step).
-  // Pre-mesh parts hit-test against alpha / imageBounds / imageWidth-Height
-  // (in that priority); post-mesh parts use the triangulation as before.
   const parts = (project?.nodes ?? []).filter((n) => {
     if (!n || n.type !== 'part' || n.visible === false) return false;
     const m = getMesh(n, project);
@@ -185,83 +218,82 @@ export function hitTestParts(project, frames, worldX, worldY, opts = {}) {
   });
   parts.sort((a, b) => (b.draw_order ?? 0) - (a.draw_order ?? 0));
 
+  /** @type {string[]} */
+  const out = [];
+
   for (const part of parts) {
     const partMesh = getMesh(part, project);
     const tris = partMesh?.triangles ?? null;
-    // Priority 1: final composed verts (post chainEval + LBS + blends)
-    // — what the renderer actually drew. Selectable at the visible
-    // location even when the part is posed via two-bone LBS or has a
-    // blend shape active. Format: Array<{x,y}>.
+    let hit = false;
+
     const finalVerts = finalVertsByPartId?.get(part.id) ?? null;
     if (finalVerts && finalVerts.length > 0 && tris && tris.length > 0) {
-      if (pointInAnyTriangleObjs(finalVerts, tris, worldX, worldY)) return part.id;
-      continue;
-    }
-    // Priority 2: chainEval rig frames in canvas-px. Used when
-    // finalVerts is unavailable (e.g. fresh rig before first render).
-    const rigVerts = frameMap.get(part.id);
-    if (rigVerts && tris && tris.length > 0) {
-      if (pointInAnyTriangle(rigVerts, tris, worldX, worldY)) return part.id;
-      continue;
-    }
-
-    const wm = worldMatrices?.get(part.id) ?? null;
-    let lx = worldX, ly = worldY;
-    if (wm) {
-      const inv = mat3Inverse(wm);
-      lx = inv[0] * worldX + inv[3] * worldY + inv[6];
-      ly = inv[1] * worldX + inv[4] * worldY + inv[7];
-    }
-
-    // Triangulated mesh path: rest verts in local space.
-    if (tris && tris.length > 0) {
-      const local = partMesh?.vertices;
-      if (Array.isArray(local) && local.length > 0
-          && pointInAnyTriangleObjs(local, tris, lx, ly)) {
-        return part.id;
+      hit = pointInAnyTriangleObjs(finalVerts, tris, worldX, worldY);
+    } else {
+      const rigVerts = frameMap.get(part.id);
+      if (rigVerts && tris && tris.length > 0) {
+        hit = pointInAnyTriangle(rigVerts, tris, worldX, worldY);
+      } else {
+        const wm = worldMatrices?.get(part.id) ?? null;
+        let lx = worldX, ly = worldY;
+        if (wm) {
+          const inv = mat3Inverse(wm);
+          lx = inv[0] * worldX + inv[3] * worldY + inv[6];
+          ly = inv[1] * worldX + inv[4] * worldY + inv[7];
+        }
+        if (tris && tris.length > 0) {
+          const local = partMesh?.vertices;
+          hit = Array.isArray(local) && local.length > 0
+            && pointInAnyTriangleObjs(local, tris, lx, ly);
+        } else {
+          const maskRec = imageDataMap?.get(part.id) ?? null;
+          if (maskRec && maskRec.w > 0) {
+            hit = sampleAlphaMask(maskRec, worldX, worldY) > 0;
+          } else {
+            const bb = part.imageBounds;
+            if (bb && typeof bb.minX === 'number' && bb.maxX > bb.minX) {
+              hit = worldX >= bb.minX && worldX <= bb.maxX
+                && worldY >= bb.minY && worldY <= bb.maxY;
+            } else {
+              const w = part.imageWidth;
+              const h = part.imageHeight;
+              hit = typeof w === 'number' && typeof h === 'number'
+                && lx >= 0 && lx <= w && ly >= 0 && ly <= h;
+            }
+          }
+        }
       }
-      continue;
     }
 
-    // Pre-mesh hit-test priority for PSD-imported parts (wizard Reorder /
-    // Adjust steps before auto-mesh runs):
-    //   (a) alpha sample of the cached canvas-sized imageData — the layer's
-    //       opaque-pixel footprint matches exactly what the user sees, so
-    //       clicks on transparent areas (between layers) fall through to
-    //       parts behind.
-    //   (b) `imageBounds` rectangle in canvas space — the opaque-pixel
-    //       bbox computed at PSD import. Coarser than alpha but still
-    //       per-layer (every layer has a different bbox).
-    //   (c) `imageWidth`/`imageHeight` rectangle in local space — final
-    //       fallback. For PSD parts these dimensions are the FULL canvas
-    //       (the texture covers the whole canvas with the layer painted
-    //       at its PSD position), so this branch is always-hit and only
-    //       useful when neither imageData nor imageBounds is available.
-    //
-    // M7b — alphaMask record is the 256² downsample of the layer's
-    // canvas-painted alpha. `sampleAlphaMask` maps (worldX, worldY) →
-    // mask cell → 0..255. Same pre-mesh-only contract as before; once
-    // a part has triangles the priority-2 rigVerts path takes over.
-    const maskRec = imageDataMap?.get(part.id) ?? null;
-    if (maskRec && maskRec.w > 0) {
-      const alpha = sampleAlphaMask(maskRec, worldX, worldY);
-      if (alpha > 0) return part.id;
-      continue;
+    if (hit) {
+      out.push(part.id);
+      if (stopAtFirst) return out;
     }
-
-    const bb = part.imageBounds;
-    if (bb && typeof bb.minX === 'number' && bb.maxX > bb.minX) {
-      if (worldX >= bb.minX && worldX <= bb.maxX
-          && worldY >= bb.minY && worldY <= bb.maxY) return part.id;
-      continue;
-    }
-
-    const w = part.imageWidth;
-    const h = part.imageHeight;
-    if (typeof w === 'number' && typeof h === 'number'
-        && lx >= 0 && lx <= w && ly >= 0 && ly <= h) return part.id;
   }
-  return null;
+  return out;
+}
+
+/**
+ * Resolve the next selection id when cycling through overlapping parts at
+ * the same click position (Blender `mouse_select_eval_buffer` parity —
+ * `view3d_select.cc:2384-2391`).
+ *
+ * Given the depth-sorted hit list (topmost first) and the currently active
+ * part id, find active in the list and return the NEXT one (wrap around).
+ * If active is not in the list (or null), the topmost is returned — same as
+ * Blender's default-to-nearest when the previously-selected object is no
+ * longer under the cursor.
+ *
+ * @param {string[]} hits  - hit ids in draw-order desc (topmost first)
+ * @param {string | null | undefined} activeId
+ * @returns {string | null}
+ */
+export function cycleHitsAfterActive(hits, activeId) {
+  if (!Array.isArray(hits) || hits.length === 0) return null;
+  if (!activeId) return hits[0];
+  const idx = hits.indexOf(activeId);
+  if (idx < 0) return hits[0];
+  return hits[(idx + 1) % hits.length];
 }
 
 /**
