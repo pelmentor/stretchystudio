@@ -952,7 +952,7 @@ async function renderPartToCanvasPng(img, srcW, srcH, canvasW, canvasH) {
  * @param {string} name
  * @returns {string}
  */
-function sanitizeName(name) {
+export function sanitizeName(name) {
   return (name ?? 'animation')
     .replace(/[^a-zA-Z0-9_-]/g, '_')
     .replace(/_+/g, '_')

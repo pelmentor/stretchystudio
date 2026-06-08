@@ -31,6 +31,8 @@ import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
 import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS } from '../../../io/live2d/idle/builder.js';
 import { buildParamFCurve } from '../../../anim/animationFCurve.js';
+import { sanitizeName } from '../../../io/live2d/exporter.js';
+import { uniqueName } from '../../../lib/uniqueName.js';
 
 // shadcn/ui forwardRef components ship without JSX-typed declarations — cast
 // via `any` so tsc accepts children/className. Same pattern as ActionsEditor's
@@ -60,8 +62,22 @@ export function IdleMotionDialog({ open, onOpenChange }) {
   const [durationSec, setDurationSec] = useState(8);
   const [fps, setFps] = useState(30);
   const [seed, setSeed] = useState(1);
+  // User-typed motion name. Empty = use the auto-suggested name derived
+  // from preset+personality (shown as the input's placeholder).
+  const [name, setName] = useState('');
   const [error, setError] = useState(/** @type {string|null} */ (null));
   const [busy, setBusy] = useState(false);
+
+  // Auto-suggested action name — mirrors the legacy default (`Idle (calm)`
+  // / `Listening (energetic)` / etc.). Used as the input placeholder so the
+  // user sees what they'll get if they don't type anything.
+  const presetLabel = PRESETS[preset]?.label ?? preset;
+  const autoName = `${presetLabel} (${personality})`;
+  // Live filename preview — shows the user the exact `.motion3.json` file
+  // that this motion will become at export. Matches `sanitizeName` in
+  // exporter.js (single source of truth — same function imported here).
+  const previewName = (name.trim() || autoName);
+  const previewFilename = `${sanitizeName(previewName)}.motion3.json`;
 
   function reset() {
     setPreset('idle');
@@ -69,6 +85,7 @@ export function IdleMotionDialog({ open, onOpenChange }) {
     setDurationSec(8);
     setFps(30);
     setSeed(1);
+    setName('');
     setError(null);
     setBusy(false);
   }
@@ -126,11 +143,19 @@ export function IdleMotionDialog({ open, onOpenChange }) {
 
       // Create the action, then update its fcurves via the store. Two-step
       // because createAction only takes a name argument.
-      const presetLabel = PRESETS[preset]?.label ?? preset;
-      const name = `${presetLabel} (${personality})`;
+      //
+      // Name resolution: user-typed value wins; empty falls back to the
+      // auto-suggested `${presetLabel} (${personality})`. Collisions get
+      // a Blender-style `.001` suffix so two motions never share an action
+      // name — which would silently collide on the exported filename
+      // (exporter.js:251-252 derives the .motion3.json name from
+      // `sanitizeName(action.name)`; same-name actions would overwrite).
+      const desiredName = (name.trim() || autoName);
+      const existingNames = new Set((project.actions ?? []).map((a) => a.name));
+      const finalName = uniqueName(desiredName, existingNames);
       const beforeIds = new Set((project.actions ?? []).map((a) => a.id));
 
-      useProjectStore.getState().createAction(name);
+      useProjectStore.getState().createAction(finalName);
 
       const projectAfter = useProjectStore.getState().project;
       const created = (projectAfter.actions ?? []).find((a) => !beforeIds.has(a.id));
@@ -181,6 +206,23 @@ export function IdleMotionDialog({ open, onOpenChange }) {
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
+          <div className="grid grid-cols-3 items-start gap-3">
+            <Label htmlFor="idle-name" className="pt-2">Name</Label>
+            <div className="col-span-2 grid gap-1">
+              <Input
+                id="idle-name"
+                type="text"
+                placeholder={autoName}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={120}
+              />
+              <p className="text-xs text-muted-foreground font-mono truncate">
+                → motion/{previewFilename}
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-3 items-center gap-3">
             <Label htmlFor="idle-preset">Preset</Label>
             <Select value={preset} onValueChange={setPreset}>
