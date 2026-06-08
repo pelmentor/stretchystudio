@@ -306,6 +306,60 @@ function mkWarpSpec({ id, targetPartId, parent = { type: 'warp', id: 'BodyXWarp'
   assert(r.disabledTargetPartIds.size === 0, 'no opts: nothing flagged disabled');
 }
 
+// ── v50 bug-fix (2026-06-08): seedRigWarps → synth → seedPhysicsModifiers
+//                              order preserves physicsModifier on parts.
+// Bug shape: pre-fix `seedPhysicsModifiers` ran BEFORE seedRigWarps in
+// seedAllRig. seedRigWarps then wrote `modifiers[0] = lattice` which
+// clobbered the just-attached physicsModifier; synthesizeModifierStacks
+// then rebuilt the full chain from the lattice leaf, never re-adding
+// the physicsModifier. User-visible: "selected 7/7 in Init Rig, hair
+// has no physics at all, no modifier visible on hair layer".
+//
+// Fix: seedAllRig order is now seedRigWarps → synth → seedPhysicsModifiers.
+// Defensive: synth now carry-forwards any prior physicsModifier entries
+// across the deformation-chain rebuild.
+import { synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
+
+{
+  const project = {
+    nodes: [
+      { id: 'p-fh', name: 'front hair', type: 'part' },
+    ],
+  };
+  // Step 1: simulate seedRigWarps writing the sway-warp leaf modifier.
+  const rigWarps = new Map([
+    ['p-fh', mkWarpSpec({ id: 'RigWarp_front_hair', targetPartId: 'p-fh' })],
+  ]);
+  seedRigWarps(project, rigWarps, 'replace');
+  // After seedRigWarps the part has the lattice leaf; no physicsModifier yet.
+  let fh = project.nodes.find(n => n.id === 'p-fh');
+  assert(fh.modifiers?.[0]?.type === 'lattice', 'post-seedRigWarps: lattice leaf at modifiers[0]');
+
+  // Step 2: simulate seedAllRig's seedPhysicsModifiers running AFTER
+  // seedRigWarps. seedPhysicsModifiers must attach the Hair Front rule
+  // onto the hair part WITHOUT trampling the existing lattice leaf.
+  seedPhysicsModifiers(project);
+
+  fh = project.nodes.find(n => n.id === 'p-fh');
+  const physMods = fh.modifiers.filter(m => m.type === 'physicsModifier');
+  assert(physMods.length === 1, 'post-seedPhysicsModifiers: 1 physicsModifier on hair part');
+  assert(physMods[0].ruleId === 'PhysicsSetting1',
+    'post-seedPhysicsModifiers: Hair Front rule attached');
+  assert(physMods[0].output?.paramId === 'ParamHairFront',
+    'post-seedPhysicsModifiers: output paramId preserved');
+  // Lattice leaf still at index 0 — sway warp deformation intact.
+  assert(fh.modifiers[0].type === 'lattice',
+    'post-seedPhysicsModifiers: lattice leaf survived at modifiers[0]');
+
+  // Step 3: re-run synthesizeModifierStacks (would happen on any later
+  // update). The defensive carry-forward must preserve physicsModifier.
+  synthesizeModifierStacks(project);
+  fh = project.nodes.find(n => n.id === 'p-fh');
+  const physModsAfterSynth = fh.modifiers.filter(m => m.type === 'physicsModifier');
+  assert(physModsAfterSynth.length === 1,
+    'post-synth: physicsModifier survives stack rebuild (defensive carry-forward)');
+}
+
 // ── seedRigWarps: enabled:false for partIds in disabledTargetPartIds ─
 // End-to-end: simulate the seedAllRig wiring — opt-out hair, verify the
 // hair part's modifiers[0] lands with enabled:false. This is the BUG-fix:

@@ -721,8 +721,23 @@ export function synthesizeModifierStacks(project) {
         });
       }
     }
-    if (stack.length > 0) {
-      part.modifiers = stack;
+    // v50 (2026-06-08): preserve non-deformation modifiers across the
+    // rebuild. `physicsModifier` is a data-carrier (pendulum spec) that
+    // writes param values via tickPhysics — it isn't part of the warp /
+    // armature deformation chain the synth re-derives. Without this
+    // carry-forward, `seedPhysicsModifiers` (which runs BEFORE this synth
+    // via `seedAllRig`) would silently lose every physicsModifier on
+    // every Init Rig. Gather the survivors from the prior modifier list
+    // and append after the rebuilt deformation stack.
+    const carryForward = [];
+    if (Array.isArray(part.modifiers)) {
+      for (const m of part.modifiers) {
+        if (m && m.type === 'physicsModifier') carryForward.push(m);
+      }
+    }
+    const finalStack = stack.concat(carryForward);
+    if (finalStack.length > 0) {
+      part.modifiers = finalStack;
     } else if ('modifiers' in part) {
       delete part.modifiers;
     }

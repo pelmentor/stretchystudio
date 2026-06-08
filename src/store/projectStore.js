@@ -1665,7 +1665,6 @@ export const useProjectStore = create((set, get) => {
       // params + user-added keys survive Init Rig 'merge'.
       seeds.seedParameters(proj, mode);
       seeds.seedMaskConfigs(proj, mode);
-      seeds.seedPhysicsModifiers(proj, mode);
       seeds.seedBoneConfig(proj);
       seeds.seedVariantFadeRules(proj);
       seeds.seedEyeClosureConfig(proj);
@@ -1857,6 +1856,19 @@ export const useProjectStore = create((set, get) => {
       // visible at synthesize time. Re-run once at the end so every
       // part's `Object.modifiers[]` reflects the final tree shape.
       peers.synthesizeModifierStacks(proj);
+      // v50 (2026-06-08): physics modifier seed MUST run AFTER
+      // synthesizeModifierStacks rebuilds the deformation chain.
+      // seedRigWarps writes `modifiers[0]` directly and synth then
+      // rebuilds the full stack — both would clobber any prior
+      // physicsModifier put there earlier in the recipe. Synth has a
+      // defensive carry-forward for `physicsModifier` entries it sees
+      // in the prior stack, but seedRigWarps' modifiers[0] overwrite
+      // happens first and trashes the carry. Cleanest ordering: build
+      // the deformation chain to completion, then append physics
+      // modifiers on top. The seed wipes any prior physicsModifier in
+      // replace mode and re-attaches one per resolved output to its
+      // owner node.
+      seeds.seedPhysicsModifiers(proj, mode);
       // V2 Phase 0.3 — modifier stacks are now canonical; the
       // export-facing `deformer.parent` chain links are a derived
       // mirror for cmo3writer (the `part.rigParent` mirror was retired
