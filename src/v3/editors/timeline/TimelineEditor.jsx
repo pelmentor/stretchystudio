@@ -20,6 +20,7 @@ import {
   captureActiveKeyformObject,
   relocateActiveKeyformByObject,
 } from '@/anim/fcurveActiveKeyform';
+import { mergeDuplicateTimeKeys } from '@/anim/graphEditOps';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -821,8 +822,30 @@ export function TimelineEditor() {
   // on every tick. The playhead line subscribes to currentTime via
   // `<TimelinePlayhead>` below; per-cell "at-playhead" highlights were
   // dropped (they strobed across keys 60 Hz during playback anyway).
-  const endFrame = Math.max(1, animEndFrame);
-  const startFrame = Math.max(0, animStartFrame);
+  // View bounds (viewStart/viewEnd). Independent of the animation's
+  // playable range — Blender's dopesheet/timeline V2D scroll/zoom state.
+  // Defaults to anim bounds + tracks them until the user pans/zooms
+  // manually (viewDirtyRef latches true). Home key resets the latch.
+  //
+  // NOTE: viewStart may be NEGATIVE — Blender shows kfs at negative
+  // frames and lets you scroll there. We don't clamp to 0 here.
+  const [viewBounds, setViewBounds] = useState(() => ({
+    start: Math.max(0, animStartFrame),
+    end: Math.max(1, animEndFrame),
+  }));
+  const viewBoundsRef = useRef(viewBounds);
+  useEffect(() => { viewBoundsRef.current = viewBounds; }, [viewBounds]);
+  const viewDirtyRef = useRef(false);
+  useEffect(() => {
+    if (viewDirtyRef.current) return;
+    setViewBounds({
+      start: Math.max(0, animStartFrame),
+      end: Math.max(1, animEndFrame),
+    });
+  }, [animStartFrame, animEndFrame]);
+
+  const endFrame = viewBounds.end;
+  const startFrame = viewBounds.start;
   const totalFrames = Math.max(endFrame - startFrame, 1);
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
@@ -1141,6 +1164,74 @@ export function TimelineEditor() {
     return () => window.removeEventListener('keydown', onKeyA, { capture: true });
   }, []);
 
+  /* ── Wheel zoom/pan + Home view-fit (Blender V2D parity) ─────────────── */
+  // Modifier-discriminated wheel:
+  //   - Ctrl+wheel = horizontal zoom around the cursor frame (Blender's
+  //     wheel-in/out behavior in V2D when not scrolling).
+  //   - Shift+wheel = horizontal pan (scrolls the view left/right by a
+  //     fraction of the current span).
+  //   - Plain wheel = browser default vertical scroll over the track
+  //     rows (we don't preventDefault, so the scroll container handles
+  //     it). The Timeline routinely has many rows visible — vertical
+  //     scroll is essential UX.
+  // Home key resets the view to the anim bounds + clears the dirty
+  // latch so future anim-bound UI edits re-sync.
+  useEffect(() => {
+    const onWheel = (e) => {
+      if (!hoverRef.current) return;
+      if (!rulerRef.current) return;
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;   // pass-through for plain wheel
+      e.preventDefault();
+      const rect = rulerRef.current.getBoundingClientRect();
+      const trackW = Math.max(1, rect.width - 2 * TRACK_PAD);
+      const localX = e.clientX - rect.left - TRACK_PAD;
+      const frac = Math.max(0, Math.min(1, localX / trackW));
+      const view = viewBoundsRef.current;
+      const span = view.end - view.start;
+      viewDirtyRef.current = true;
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        // Pan: scroll by ~10% of span per typical wheel notch.
+        const panFrames = (e.deltaY * span) / (trackW * 0.5);
+        setViewBounds({
+          start: view.start + panFrames,
+          end: view.end + panFrames,
+        });
+        return;
+      }
+      // Ctrl/Cmd+wheel = zoom around cursor frame. deltaY > 0 = zoom out.
+      const zoomFactor = Math.exp(e.deltaY * 0.001);
+      const newSpan = Math.max(2, Math.min(50_000, span * zoomFactor));
+      const cursorFrame = view.start + frac * span;
+      setViewBounds({
+        start: cursorFrame - frac * newSpan,
+        end: cursorFrame + (1 - frac) * newSpan,
+      });
+    };
+    const trackAreaEl = trackAreaRef.current;
+    if (!trackAreaEl) return undefined;
+    trackAreaEl.addEventListener('wheel', onWheel, { passive: false });
+    return () => trackAreaEl.removeEventListener('wheel', onWheel);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!hoverRef.current) return;
+      if (e.code !== 'Home') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      viewDirtyRef.current = false;
+      setViewBounds({
+        start: Math.max(0, animStartFrame),
+        end: Math.max(1, animEndFrame),
+      });
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [animStartFrame, animEndFrame]);
+
   /* ── Auto-select action when one exists ──────────────────────────────── */
   // Stage 1.E: only auto-select when neither scene-binding nor UI-store
   // resolves an action. If the scene is already bound, that wins — no
@@ -1189,15 +1280,52 @@ export function TimelineEditor() {
 
   /* ── Drag Handlers ──────────────────────────────────────────────────── */
 
-  // Playhead dragging
+  // MMB-pan helper (Blender V2D pan parity). Shared by ruler + track
+  // area so MMB anywhere over the timeline pans the view horizontally.
+  // Pre-fix: MMB had no binding → fell through to button-agnostic seek
+  // + box-select, which combined with record-mode autokey looked like
+  // "MMB creates keyframes". Now MMB explicitly pans + flips
+  // viewDirtyRef so anim-bound sync stops fighting the user's view.
+  const startMmbPan = useCallback((e) => {
+    if (!rulerRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = rulerRef.current.getBoundingClientRect();
+    const trackW = Math.max(1, rect.width - 2 * TRACK_PAD);
+    const startView = viewBoundsRef.current;
+    const span = startView.end - startView.start;
+    const framesPerPx = span / trackW;
+    const startX = e.clientX;
+    viewDirtyRef.current = true;
+    dragCtx.current = { type: 'pan' };
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX;
+      const frameDelta = -dx * framesPerPx;
+      setViewBounds({
+        start: startView.start + frameDelta,
+        end: startView.end + frameDelta,
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      dragCtx.current.type = null;
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  // Playhead dragging — LMB on ruler; MMB pans the view.
   const onRulerPointerDown = useCallback((e) => {
+    if (e.button === 1) { startMmbPan(e); return; }
+    if (e.button !== 0) return;   // RMB / forward / back ignored
     dragCtx.current = { type: 'playhead' };
     const frame = xToFrame(e.clientX);
-    animSeekFrame(clamp(frame, startFrame, endFrame));
+    animSeekFrame(clamp(frame, Math.max(0, animStartFrame), Math.max(1, animEndFrame)));
 
     const handleMove = (ev) => {
       const frame = xToFrame(ev.clientX);
-      animSeekFrame(clamp(frame, startFrame, endFrame));
+      animSeekFrame(clamp(frame, Math.max(0, animStartFrame), Math.max(1, animEndFrame)));
     };
     const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
@@ -1206,16 +1334,29 @@ export function TimelineEditor() {
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
-  }, [xToFrame, animSeekFrame, startFrame, endFrame]);
+  }, [xToFrame, animSeekFrame, animStartFrame, animEndFrame, startMmbPan]);
 
   // Keyframe clicking & dragging
-  // 2026-04-29: `rowKey` (`node:<id>` | `param:<id>`) replaces the
-  // legacy `nodeId` argument so param-track keyframes can be selected,
-  // dragged, copy/pasted and deleted through the same code path. The
-  // selection ID is `${rowKey}:${timeMs}`; the drag context's
-  // origKeyframes carries the rowKey so the find-track step inside
-  // handleMove can dispatch on `paramId` vs `nodeId+property`.
+  //
+  // Identity-tracked drag (2026-06-09 pt5). Pre-fix: time-based re-find
+  // collapsed two selected kfs that converged to the same time, and
+  // incremental delta + Math.max(0, ...) clamping permanently fused kfs
+  // at frame 0. Bug visible to user as "drag corrupts and overrides many
+  // keyframes or puts them out of order" — selected kfs would smush into
+  // each other and non-selected neighbors would get steamrolled with no
+  // dedupe on commit.
+  //
+  // Now: at FIRST move, each selected kf gets a transient `_dragId`
+  // marker (parallel to the G modal's _grabId at line 1059). Per-tick
+  // moves find by _dragId, so coincident times can't aliased into the
+  // same kf. origTimeMs stays FIXED across ticks — newTime = origTime +
+  // (shared)Δframe. Δframe is clamped uniformly across the selection so
+  // nothing goes below frame 0 individually but the cluster keeps its
+  // shape. On pointerup commit: mergeDuplicateTimeKeys dedupes any
+  // selected-vs-non-selected collisions (selected wins, Blender's
+  // unconditional-delete branch at fcurve.cc:1902) + strip _dragId.
   const onKeyframePointerDown = useCallback((e, rowKey, timeMs) => {
+    if (e.button !== 0) return;   // LMB only — MMB/RMB handled elsewhere
     e.stopPropagation();
 
     const id = `${rowKey}:${timeMs}`;
@@ -1235,7 +1376,9 @@ export function TimelineEditor() {
       }
     }
 
-    // Prepare drag context — store enough info to re-find each fcurve.
+    // Snapshot orig data — find each selected kf, record origTimeMs +
+    // handle deltas. We DON'T tag _dragId yet: a pure click (no move)
+    // shouldn't mutate project state.
     const orig = [];
     if (animation) {
       for (const fc of animation.fcurves) {
@@ -1244,79 +1387,141 @@ export function TimelineEditor() {
         const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
         for (const kf of fc.keyforms) {
           if (newSel.has(`${fcurveRowKey}:${kf.time}`)) {
-            orig.push(target.kind === 'param'
-              ? { rowKey: fcurveRowKey, paramId: target.paramId, origTimeMs: kf.time }
-              : { rowKey: fcurveRowKey, trackNodeId: target.nodeId, prop: target.property, origTimeMs: kf.time }
-            );
+            orig.push({
+              rowKey: fcurveRowKey,
+              paramId: target.kind === 'param' ? target.paramId : null,
+              trackNodeId: target.kind === 'node' ? target.nodeId : null,
+              prop: target.kind === 'node' ? target.property : null,
+              origTimeMs: kf.time,
+              origHandleLeftDt: kf.handleLeft ? kf.handleLeft.time - kf.time : 0,
+              origHandleRightDt: kf.handleRight ? kf.handleRight.time - kf.time : 0,
+              dragId: null,   // filled at first move
+            });
           }
         }
       }
     }
+
+    if (orig.length === 0) return;
 
     dragCtx.current = {
       type: 'keyframe',
       startX: e.clientX,
       startFrame: msToFrame(timeMs, fps),
       origKeyframes: orig,
+      tagged: false,
+      didMove: false,
     };
 
-    beginBatch(useProjectStore.getState().project);
+    const findFc = (a, item) => (
+      item.paramId
+        ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
+        : a.fcurves.find((f) => {
+            const t = decodeFCurveTarget(f);
+            return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
+          })
+    );
 
     const handleMove = (ev) => {
       const dragFrameDelta = xToFrame(ev.clientX) - dragCtx.current.startFrame;
-      if (dragFrameDelta !== 0) {
-        let nextSel = new Set();
+      if (dragFrameDelta === 0 && !dragCtx.current.didMove) return;
+
+      // First-move bootstrap — open the undo batch and stamp each
+      // selected kf with a unique _dragId so future ticks find by
+      // identity, not by current time (which can alias).
+      if (!dragCtx.current.tagged) {
+        beginBatch(useProjectStore.getState().project);
+        let nextDragId = 1;
         update((p) => {
           const a = getActiveSceneAction(p, activeActionId);
           if (!a) return;
           for (const item of dragCtx.current.origKeyframes) {
-            const fc = item.paramId
-              ? a.fcurves.find(f => fcurveTargetsParam(f, item.paramId))
-              : a.fcurves.find(f => {
-                  const t = decodeFCurveTarget(f);
-                  return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
-                });
-            if (fc) {
-              const kf = fc.keyforms.find(k => k.time === item.origTimeMs);
-              if (kf) {
-                const newFrame = Math.max(0, msToFrame(item.origTimeMs, fps) + dragFrameDelta);
-                kf.time = frameToMs(newFrame, fps);
-                nextSel.add(`${item.rowKey}:${kf.time}`);
-              }
-            }
-          }
-          // Sort fcurves by time to ensure play engine doesn't trip up.
-          // Audit-fix HIGH-A3 (Slice 5.H dual-audit 2026-05-16) —
-          // per-tick sort across ALL fcurves used to drift
-          // `activeKeyformIndex` whenever a dragged kf crossed a
-          // neighbor; the Graph Editor highlight would jump to a
-          // different kf each pointer-move tick. Mirror the
-          // FCurveEditor capture/relocate pattern so the active
-          // index stays pinned to its object identity through reorder.
-          for (const f of a.fcurves) {
-            const capturedActive = captureActiveKeyformObject(f);
-            f.keyforms.sort((k1, k2) => k1.time - k2.time);
-            relocateActiveKeyformByObject(a, f.id, capturedActive);
+            const fc = findFc(a, item);
+            if (!fc) continue;
+            const kf = fc.keyforms.find((k) => k.time === item.origTimeMs);
+            if (!kf) continue;
+            const dragId = nextDragId++;
+            kf._dragId = dragId;
+            item.dragId = dragId;
           }
         }, { skipHistory: true });
-
-        // Update selection to match new times
-        if (nextSel.size > 0) {
-          setSelectedKeyframes(nextSel);
-          dragCtx.current.origKeyframes = dragCtx.current.origKeyframes.map(item => {
-            const newFrame = Math.max(0, msToFrame(item.origTimeMs, fps) + dragFrameDelta);
-            return { ...item, origTimeMs: frameToMs(newFrame, fps) };
-          });
-          dragCtx.current.startFrame += dragFrameDelta;
-        }
+        dragCtx.current.tagged = true;
       }
+
+      // Shared-clamp Δ so the cluster keeps its shape: shrink Δ as
+      // needed so no item's newFrame would go below 0. Pre-fix
+      // per-item Math.max(0, ...) silently collapsed nearby items.
+      let minDelta = dragFrameDelta;
+      for (const item of dragCtx.current.origKeyframes) {
+        const origFrame = msToFrame(item.origTimeMs, fps);
+        if (origFrame + minDelta < 0) minDelta = -origFrame;
+      }
+      dragCtx.current.didMove = true;
+
+      const nextSel = new Set();
+      update((p) => {
+        const a = getActiveSceneAction(p, activeActionId);
+        if (!a) return;
+        for (const item of dragCtx.current.origKeyframes) {
+          if (item.dragId == null) continue;
+          const fc = findFc(a, item);
+          if (!fc) continue;
+          const kf = fc.keyforms.find((k) => k._dragId === item.dragId);
+          if (!kf) continue;
+          const newFrame = msToFrame(item.origTimeMs, fps) + minDelta;
+          const newTime = frameToMs(newFrame, fps);
+          kf.time = newTime;
+          if (kf.handleLeft) kf.handleLeft.time = newTime + item.origHandleLeftDt;
+          if (kf.handleRight) kf.handleRight.time = newTime + item.origHandleRightDt;
+          nextSel.add(`${item.rowKey}:${newTime}`);
+        }
+        // Sort fcurves by time. Active-halo capture/relocate keeps the
+        // Graph Editor halo pinned to its kf object across reorder
+        // (audit-fix HIGH-A3, Slice 5.H 2026-05-16).
+        for (const f of a.fcurves) {
+          const capturedActive = captureActiveKeyformObject(f);
+          f.keyforms.sort((k1, k2) => k1.time - k2.time);
+          relocateActiveKeyformByObject(a, f.id, capturedActive);
+        }
+      }, { skipHistory: true });
+
+      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
     };
 
     const handleUp = () => {
-      endBatch();
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
       dragCtx.current.type = null;
+
+      if (!dragCtx.current.tagged) return;   // pure click — nothing to commit
+
+      // Commit: dedupe selected-vs-non-selected collisions, then strip
+      // every _dragId tag and rebuild the selection set from survivors.
+      const nextSel = new Set();
+      update((p) => {
+        const a = getActiveSceneAction(p, activeActionId);
+        if (!a) return;
+        for (const fc of a.fcurves) {
+          const sel = new Map();
+          for (let i = 0; i < fc.keyforms.length; i++) {
+            if (fc.keyforms[i]._dragId != null) sel.set(i, { center: true });
+          }
+          if (sel.size > 0) mergeDuplicateTimeKeys(fc, sel, 0.5);
+          const target = decodeFCurveTarget(fc);
+          const fcurveRowKey = target
+            ? (target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`)
+            : null;
+          for (const k of fc.keyforms) {
+            if (k._dragId != null) {
+              delete k._dragId;
+              if (fcurveRowKey) nextSel.add(`${fcurveRowKey}:${k.time}`);
+            }
+          }
+        }
+      }, { skipHistory: !dragCtx.current.didMove });
+
+      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
+      endBatch();
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
@@ -1325,14 +1530,19 @@ export function TimelineEditor() {
 
   // Box Selection
   const onTrackAreaPointerDown = useCallback((e) => {
+    if (e.button === 1) { startMmbPan(e); return; }   // MMB pans the view
+    if (e.button !== 0) return;                       // RMB ignored
     if (e.target.closest('.keyframe-diamond') || e.target.closest('.ruler-track')) return;
     if (!trackAreaRef.current) return;
 
-    // Seek current frame to clicked position (if in track area, not labels)
+    // Seek current frame to clicked position (if in track area, not labels).
+    // Clamp the seek to the ANIM bounds, not the VIEW bounds — view may be
+    // zoomed/panned away from the playable range but the playhead should
+    // stay within [animStart, animEnd].
     const rulerRect = rulerRef.current?.getBoundingClientRect();
     if (rulerRect && e.clientX >= rulerRect.left) {
       const frame = xToFrame(e.clientX);
-      animSeekFrame(clamp(frame, startFrame, endFrame));
+      animSeekFrame(clamp(frame, Math.max(0, animStartFrame), Math.max(1, animEndFrame)));
     }
 
     // Deselect if clicking empty space without shift
@@ -1439,7 +1649,7 @@ export function TimelineEditor() {
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
-  }, [animation, startFrame, endFrame, totalFrames, fps, selectedKeyframes, xToFrame, animSeekFrame]);
+  }, [animation, animStartFrame, animEndFrame, startFrame, endFrame, totalFrames, fps, selectedKeyframes, xToFrame, animSeekFrame, startMmbPan]);
 
   /* ── Clipboard Actions ──────────────────────────────────────────────── */
   // Copy now keyed by rowKey rather than nodeId. Param-row clipboard
