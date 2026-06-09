@@ -89,7 +89,7 @@ function near(a, b, eps = 1e-6) {
   }
   passed++;
   assert(kfs[0].time === 0, 'genSine: starts at 0');
-  assert(kfs[kfs.length - 1].time === 4000, 'genSine: ends at duration');
+  assert(near(kfs[kfs.length - 1].time, 4000, 1e-6), 'genSine: ends at duration');
 }
 
 {
@@ -184,15 +184,16 @@ function near(a, b, eps = 1e-6) {
   }
   assert(allBezier, 'genSine: every kf has interpolation=bezier + L/R handles');
 
-  // Handle slope at t≈0 should match analytical cosine derivative.
-  // v = sin(ωt), dv/dt = ω·cos(ωt). At t=0: dv/dt = ω = 2π/2000.
-  // Handle offset = (D/N)/3. genSine uses N = max(8, cycles*12) = 24
-  // (cycles=2). dt = 4000/24, handleOff = dt/3 ≈ 55.56ms.
-  // Expected handleRight.value at t=0: 0 + ω·handleOff
-  //                                    = (2π/2000) · (4000/72)
-  //                                    = 8π/2880 ≈ 0.1745
+  // Handle slope at t≈0 should match analytical cosine derivative scaled by
+  // the adaptive handle offset. v = sin(ωt), dv/dt = ω·cos(ωt). At t=0:
+  // dv/dt = ω = 2π/2000 = |dv/dt|_max → adaptive factor = 1 → offset = dt/3.
+  // N = max(8, cycles*30) = 60 (cycles=2). dt = 4000/60 ≈ 66.67ms.
+  // Expected handleRight.value at t=0: 0 + ω·(dt/3)
+  //                                    = (2π/2000) · (4000/180)
   const kf0 = kfs[0];
-  const expectedHRValue = (2 * Math.PI / 2000) * (4000 / 24 / 3);
+  const NperCycle = 30;
+  const N = Math.max(8, 2 * NperCycle);
+  const expectedHRValue = (2 * Math.PI / 2000) * (4000 / N / 3);
   assert(near(kf0.handleRight.value, expectedHRValue, 1e-6),
     'genSine: t=0 handleRight matches analytical derivative');
   assert(near(kf0.handleLeft.value, -expectedHRValue, 1e-6),

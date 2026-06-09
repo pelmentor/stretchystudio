@@ -63,7 +63,12 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
   const snappedPeriod = D / cycles;
   const omega = TWO_PI / snappedPeriod;
 
-  const N = samples > 0 ? samples : Math.max(8, cycles * 12);
+  // 30 samples per cycle (was 12) — the bezier-vs-true-sine error is
+  // O((dt/period)^4), so 2.5× density drops error by ~40×. Combined
+  // with the adaptive handle offset below, the visual is
+  // indistinguishable from SS viewport's live `Math.sin` evaluation
+  // when Cubism / ren'py replay the bezier segments.
+  const N = samples > 0 ? samples : Math.max(8, cycles * 30);
   const dt = D / N;
   const handleOffMax = dt / 3;
   // `handleType: free/free` is load-bearing: without it `normalizeKeyforms`
@@ -110,6 +115,11 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
   }
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
+  // Pin the last sample's time to D exactly. `i * dt` for the loop's
+  // final iteration is mathematically D but FP can produce
+  // D + 1e-12 which fails downstream bounds-checks (test_actionExportCan3
+  // refused 8000.000000000001 as "time out of bounds: 8000").
+  last.time = D;
   last.value = first.value;
   const lastDvdt = amplitude * omega * Math.cos(phase);
   const lastOff = handleOffMax * (dvdtMax > 0
@@ -118,6 +128,10 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
   last.handleLeft = {
     time: last.time - lastOff,
     value: first.value - lastDvdt * lastOff,
+  };
+  last.handleRight = {
+    time: last.time + lastOff,
+    value: first.value + lastDvdt * lastOff,
   };
   return kfs;
 }
@@ -192,6 +206,7 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
   // removes any drift accumulated across `samples` evaluations.
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
+  last.time = D; // FP-exact pin — see genSine comment.
   last.value = first.value;
   let dvdt0 = 0;
   for (const c of comps) dvdt0 += c.a * c.omega * Math.cos(c.phi);

@@ -366,10 +366,28 @@ export function resultToSsAction(result, opts = {}) {
     fps = result.motion3.Meta.Fps ?? 30,
   } = opts;
 
+  // Attach a head-of-stack Cycles modifier to every fcurve so the
+  // motion3.json exporter detects this as a UNIFORM LOOPING action
+  // (`actionHasUniformLoopingCycles`) and emits `Meta.Loop: true`.
+  // Without it Cubism/ren'py don't auto-loop the motion — the player
+  // must restart on each cycle and the restart introduces a visible
+  // discontinuity at the wrap. Idle motions are loop-safe by
+  // construction (loop-pin on every generator), so unconditionally
+  // marking the action as looping matches authoring intent.
+  const cyclesModifier = {
+    type: 'cycles',
+    data: { before: 'none', after: 'repeat', afterCycles: 0 },
+    muted: false,
+    disabled: false,
+    useRestrictedRange: false,
+  };
   const fcurves = [];
   for (const [paramId, kfs] of result.paramKeyframes) {
     const fc = buildParamFCurve(paramId, kfs);
-    if (fc) fcurves.push(fc);
+    if (fc) {
+      fc.modifiers = [cyclesModifier];
+      fcurves.push(fc);
+    }
   }
 
   const action = {
