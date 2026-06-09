@@ -338,14 +338,36 @@ export function seedRigWarps(project, rigWarps, mode = 'replace', opts = {}) {
           if (typeof prior.showInEditor === 'boolean') priorShowInEditor = prior.showInEditor;
         }
       }
-      // Subsystem opt-out (2026-06-08): if this part's owning subsystem
-      // is flagged off, force-disable the modifier — overrides any
-      // priorEnabled. See seedRigWarps doc-comment for the why.
-      const forceDisabled = disabledTargetPartIds?.has(partId) === true;
+      // Subsystem opt-out (2026-06-09): KEEP the leaf modifier enabled.
+      //
+      // The earlier Phase 1 fix (b485b52, 2026-06-08) set `enabled: false`
+      // here for subsystem-opted-out parts. That looked semantically
+      // correct ("subsystem off → modifier off") but routed the chain
+      // through `_resolveModifierChain`'s skip-disabled branch, which
+      // promoted the chain leaf to the rigwarp's PARENT (e.g.
+      // FaceParallaxWarp). The runtime then re-projected the cached UV
+      // verts (in rigwarp's frame) into the new parent's frame via
+      // `_reprojectKeyformVerts` — and that round-trip had a 153 px drift
+      // for hair on real models. User-reported bug 2026-06-09.
+      //
+      // The correct semantic was already achieved by the OTHER half of
+      // the subsystem opt-out: `paramSpec.subsystems` filters
+      // ParamHairFront / ParamHairBack out of `project.parameters`. The
+      // rigwarp's bindings to those params become ORPHAN; the depgraph
+      // resolves an orphan param to its default (0), which lands on
+      // `keyform[0] = restGrid` of the rigwarp — IDENTITY deformation.
+      // Visual result: hair at rest position, exactly what the user
+      // wants when hairRig is off. No reprojection needed; no drift.
+      //
+      // `disabledTargetPartIds` retained on the API surface but unused
+      // here — the harvest-side flag is still useful for downstream UI
+      // surfaces (e.g. a modifier-stack badge "param missing"); the seed
+      // itself just preserves `priorEnabled`.
+      void disabledTargetPartIds;
       const leafEntry = {
         type: 'lattice',
         objectId: spec.id,
-        enabled: forceDisabled ? false : priorEnabled,
+        enabled: priorEnabled,
         mode: priorMode,
         showInEditor: priorShowInEditor,
       };

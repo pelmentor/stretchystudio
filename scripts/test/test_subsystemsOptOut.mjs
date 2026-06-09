@@ -393,8 +393,14 @@ import { synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
     'opt-out: hair part modifiers[0] is the lattice leaf');
   assert(fh.modifiers[0].objectId === 'RigWarp_front_hair',
     'opt-out: hair leaf points at the seeded warp');
-  assert(fh.modifiers[0].enabled === false,
-    'opt-out: hair part modifier.enabled === false (sway disabled)');
+  // BUGFIX 2026-06-09 — opt-out now KEEPS enabled:true. The earlier
+  // `enabled: false` triggered a chain-reproject path with 153 px drift on
+  // real hair geometry; the orphan-param mechanism (paramSpec filters
+  // ParamHairFront out → binding orphan → rigwarp evaluates at
+  // default=0=keyform[0]=restGrid = identity) already produces the
+  // desired "no sway" visual without disabling the chain leaf.
+  assert(fh.modifiers[0].enabled === true,
+    'opt-out: hair leaf stays enabled:true — identity-at-rest via orphan-param, not via chain-skip-reproject (which had 153px drift)');
 
   assert(Array.isArray(sh.modifiers) && sh.modifiers.length > 0,
     'on: clothing part HAS modifiers[]');
@@ -403,9 +409,10 @@ import { synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
 }
 
 // ── seedRigWarps: re-Init Rig with subsystem STILL opted out
-// resets enabled to false even if user had manually toggled it on
-// between Init Rigs. Subsystem opt-out at Init Rig time WINS over
-// priorEnabled carry-forward.
+// preserves the user's priorEnabled state. Subsystem opt-out no longer
+// force-overrides the flag (per 2026-06-09 bugfix — see explanation
+// above); the desired no-sway behaviour comes from the orphan-param
+// path, leaving manual toggles undisturbed.
 {
   const project = {
     nodes: [
@@ -426,8 +433,8 @@ import { synthesizeModifierStacks } from '../../src/store/deformerNodeSync.js';
     disabledTargetPartIds: new Set(['p-front-hair']),
   });
   const fh = project.nodes.find(n => n.id === 'p-front-hair');
-  assert(fh.modifiers[0].enabled === false,
-    're-Init with subsystem still off: enabled reset to false (overrides priorEnabled:true)');
+  assert(fh.modifiers[0].enabled === true,
+    're-Init with subsystem still off: priorEnabled preserved (no force-disable on opt-out)');
 }
 
 // ── seedRigWarps: subsystem ENABLED preserves user's prior disable
