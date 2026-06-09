@@ -117,7 +117,17 @@ export function DopesheetEditor() {
   const updateProject  = useProjectStore((s) => s.updateProject);
   const activeActionId = useAnimationStore((s) => s.activeActionId);
   const selection = useSelectionStore((s) => s.items);
-  const currentTime  = useAnimationStore((s) => s.currentTime);
+  // NOTE: `currentTime` is intentionally NOT subscribed at the parent
+  // level. Pre-fix the whole DopesheetEditor (incl. every Row + every
+  // keyform dot) re-rendered on every playhead tick — on a 240-frame
+  // record-mode action that's ~3000 dot React nodes reconciling per
+  // animation frame, dropping the Viewport tab to ~12 fps. The only
+  // currentTime-dependent things are the playhead line (Ruler) and the
+  // vertical line over the track area; both now live in tiny components
+  // that subscribe internally. The per-keyform `isHot` cue (was using
+  // currentTime to highlight the dot at the playhead) was dropped —
+  // during continuous playback it strobed across keys 60 times/sec
+  // anyway, not a useful cue.
   const setCurrentTime = useAnimationStore((s) => s.setCurrentTime);
 
   // Stage 1.E: scene-bound action wins over UI-store fallback. Audit-fix
@@ -1125,7 +1135,6 @@ export function DopesheetEditor() {
         <div className="flex flex-col">
           <Ruler
             duration={duration}
-            currentTime={currentTime}
             onSeek={(ms) => setCurrentTime(ms)}
           />
           <div
@@ -1150,7 +1159,6 @@ export function DopesheetEditor() {
                   rowIdx={idx}
                   row={row}
                   duration={duration}
-                  currentTime={currentTime}
                   isActiveChannel={row.fcurveId !== '' && row.fcurveId === activeFCurveId}
                   isActiveKeyformSelected={isKeyformCenterSelected(
                     keyformSelectionHandles,
@@ -1214,6 +1222,11 @@ export function DopesheetEditor() {
                 Grab: {Math.round(grabState.deltaMs) >= 0 ? '+' : ''}{Math.round(grabState.deltaMs)}ms · LMB/Enter commit · RMB/Esc cancel
               </div>
             )}
+            {/* Single playhead line spanning the whole track area. Was
+                duplicated per-row (and the entire dopesheet re-rendered
+                on every playhead tick); now a self-contained subscriber
+                that re-renders only this 1-pixel-wide span. */}
+            <TrackAreaPlayhead duration={duration} />
           </div>
         </div>
       </div>
@@ -1221,7 +1234,7 @@ export function DopesheetEditor() {
   );
 }
 
-function Ruler({ duration, currentTime, onSeek }) {
+function Ruler({ duration, onSeek }) {
   const ticks = useMemo(() => buildRulerTicks(duration), [duration]);
   return (
     <div
@@ -1254,16 +1267,51 @@ function Ruler({ duration, currentTime, onSeek }) {
             {(t / 1000).toFixed(1)}
           </span>
         ))}
-        <span
-          className="absolute top-0 bottom-0 w-px bg-primary"
-          style={{ left: `${(currentTime / duration) * 100}%` }}
-        />
+        <RulerPlayhead duration={duration} />
       </div>
     </div>
   );
 }
 
-function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek, onRowPointerEnter, onRowPointerLeave }) {
+/**
+ * Tiny standalone subscriber that owns the playhead-line render. Lives
+ * inside the parent's track area as a sibling overlay so a `currentTime`
+ * change only re-renders this 1-pixel span, not the whole dopesheet.
+ *
+ * @param {{ duration: number }} props
+ */
+function RulerPlayhead({ duration }) {
+  const currentTime = useAnimationStore((s) => s.currentTime);
+  return (
+    <span
+      className="absolute top-0 bottom-0 w-px bg-primary pointer-events-none"
+      style={{ left: `${(currentTime / duration) * 100}%` }}
+      aria-hidden
+    />
+  );
+}
+
+/**
+ * Single playhead line spanning the track area's full height. Replaces
+ * the per-row playhead spans that were being rendered inside every Row
+ * (and dragged the whole dopesheet into a re-render on every tick).
+ *
+ * @param {{ duration: number }} props
+ */
+function TrackAreaPlayhead({ duration }) {
+  const currentTime = useAnimationStore((s) => s.currentTime);
+  // Offset by LABEL_W so the line sits over the timeline area, not the
+  // left-side label column.
+  return (
+    <span
+      className="absolute top-0 bottom-0 w-px bg-primary/60 pointer-events-none z-10"
+      style={{ left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${currentTime / duration})` }}
+      aria-hidden
+    />
+  );
+}
+
+function Row({ rowIdx, row, duration, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek, onRowPointerEnter, onRowPointerLeave }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -1338,7 +1386,6 @@ function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyf
         {orderedIndices.map((i) => {
           const kf = row.keyforms[i];
           const left = (kf.time / duration) * 100;
-          const isHot = Math.abs(kf.time - currentTime) < 1;
           const isActiveHalo = showActiveHalo && i === activeKfIdx;
           // Slice 6.A — per-tick selection state. Empty-fcurveId rows
           // (group headers / row-without-fcurve) never participate in
@@ -1355,7 +1402,7 @@ function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyf
                   ? 'ring-2 ring-yellow-300/90 bg-amber-300'
                   : isSelected
                     ? 'ring-2 ring-orange-400 bg-amber-400'
-                    : (isHot ? 'bg-primary ring-1 ring-primary/40' : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400'))
+                    : 'bg-amber-500/80 ring-1 ring-card hover:bg-amber-400')
               }
               style={{ left: `calc(${left}% - 4px)` }}
               title={`${kf.time.toFixed(0)}ms · ${formatValue(kf.value)}${isActiveHalo ? ' · active' : isSelected ? ' · selected' : ''}`}
@@ -1417,11 +1464,9 @@ function Row({ rowIdx, row, duration, currentTime, isActiveChannel, isActiveKeyf
             />
           );
         })}
-        <span
-          className="absolute top-0 bottom-0 w-px bg-primary/60 pointer-events-none"
-          style={{ left: `${(currentTime / duration) * 100}%` }}
-          aria-hidden
-        />
+        {/* Per-row playhead line removed — replaced by a single
+            `<TrackAreaPlayhead>` overlay that spans the whole track
+            area (parent renders it once). */}
       </div>
     </div>
   );
