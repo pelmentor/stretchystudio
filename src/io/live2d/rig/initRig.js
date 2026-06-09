@@ -416,6 +416,63 @@ export function pruneOrphanRotationDeformers(rigSpec) {
  *   debug: object|null,
  * }>}
  */
+/**
+ * Decide whether `initializeRigFromProject` should use the authored
+ * (cmo3-scene-backed) rig path or fall through to heuristic synthesis.
+ *
+ * The authored path is correct only when the imported scene's parts list
+ * is still a superset of the project's current parts. If the user added
+ * new layers (variant eyes like `irides-l.smile`, accessories, etc.)
+ * since import, the authored path can't rig them — it reads the original
+ * deformer graph and has no synthesis path for parts it doesn't know
+ * about. Detect that case here so the caller can fall through to
+ * `generateCmo3` (which DOES run all the variant-aware branches —
+ * compound 2D blink × variant keyforms, per-part rig warps, variant
+ * mask pairings).
+ *
+ * Pure function — no side effects, no logging. Caller decides whether
+ * to warn (Init Rig does).
+ *
+ * @param {*} project
+ * @returns {{
+ *   use: boolean,
+ *   reason: 'no-scene' | 'authored' | 'stale-scene',
+ *   newPartNames: string[],
+ *   firstNewPartVariant: string | null,
+ * }}
+ */
+export function planAuthoredPath(project) {
+  const sceneOk = !!(
+    project?._cmo3Scene
+    && Array.isArray(project._cmo3Scene.deformers)
+    && project._cmo3Scene.deformers.length > 0
+  );
+  if (!sceneOk) {
+    return { use: false, reason: 'no-scene', newPartNames: [], firstNewPartVariant: null };
+  }
+  const sceneNames = new Set();
+  for (const p of project._cmo3Scene.parts ?? []) {
+    if (p && typeof p.name === 'string' && p.name.length > 0) sceneNames.add(p.name);
+  }
+  /** @type {string[]} */
+  const newPartNames = [];
+  /** @type {string | null} */
+  let firstNewPartVariant = null;
+  for (const n of project.nodes ?? []) {
+    if (!n || n.type !== 'part') continue;
+    if (typeof n.name !== 'string' || n.name.length === 0) continue;
+    if (sceneNames.has(n.name)) continue;
+    newPartNames.push(n.name);
+    if (firstNewPartVariant == null && typeof n.variantSuffix === 'string' && n.variantSuffix.length > 0) {
+      firstNewPartVariant = n.variantSuffix;
+    }
+  }
+  if (newPartNames.length > 0) {
+    return { use: false, reason: 'stale-scene', newPartNames, firstNewPartVariant };
+  }
+  return { use: true, reason: 'authored', newPartNames: [], firstNewPartVariant: null };
+}
+
 export async function initializeRigFromProject(project, images = new Map()) {
   logger.time('rigInit', 'full');
   // Outer try/catch ensures `rigInit:full` (and the conditional
@@ -446,7 +503,31 @@ export async function initializeRigFromProject(project, images = new Map()) {
   // docs/archive/plans-shipped/INIT_RIG_AUTHORED_REWRITE.md (closes the BUG-003 9.45 px
   // PARAM signal at AngleZ_pos30 by using the same rig values Cubism
   // does instead of regenerating them).
-  if (project._cmo3Scene && Array.isArray(project._cmo3Scene.deformers) && project._cmo3Scene.deformers.length > 0) {
+  //
+  // **Stale-scene guard:** if the project has parts that aren't in the
+  // imported scene (user added new layers — variants, accessories, etc.
+  // since the cmo3 import), the authored path can't rig them: it reads
+  // the original deformer graph and has no synthesis for parts it doesn't
+  // recognize. Detect new parts and fall through to heuristic synthesis
+  // so the additions get proper per-part rig warps, compound 2D variant
+  // keyforms, and mask pairings. The trade-off — heuristic synthesis
+  // regenerates the WHOLE rig, possibly differing from the imported
+  // values — is the right default for the "add layers + Init Rig" flow
+  // because that's the user's explicit intent.
+  const authoredPathPlan = planAuthoredPath(project);
+  if (authoredPathPlan.reason === 'stale-scene') {
+    logger.warn(
+      'rigInit',
+      `authored cmo3 scene is stale — ${authoredPathPlan.newPartNames.length} new part(s) added since import; falling through to heuristic synthesis so they get rigged properly`,
+      {
+        newPartCount: authoredPathPlan.newPartNames.length,
+        newPartNames: authoredPathPlan.newPartNames.slice(0, 8),
+        truncated: authoredPathPlan.newPartNames.length > 8,
+        firstNewPartVariant: authoredPathPlan.firstNewPartVariant,
+      },
+    );
+  }
+  if (authoredPathPlan.use) {
     logger.time('rigInit', 'authored-path');
     const subsystems = resolveAutoRigConfig(project).subsystems ?? null;
     const built = buildRigSpecFromCmo3({

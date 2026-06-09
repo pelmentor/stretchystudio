@@ -12,6 +12,7 @@ import {
   harvestSeedFromRigSpec,
   initializeRigFromProject,
   pruneOrphanRotationDeformers,
+  planAuthoredPath,
 } from '../../src/io/live2d/rig/initRig.js';
 
 let passed = 0;
@@ -409,6 +410,103 @@ function makeNeckWarpSpec() {
   const r = pruneOrphanRotationDeformers(rigSpec);
   assert(r.droppedRotationIds.includes('OrphanRot'), 'prune: orphan rotation dropped');
   assert(!r.droppedParamIds.includes('ParamShared'), 'prune: shared param preserved (warp still binds it)');
+}
+
+// ── planAuthoredPath — authored-vs-heuristic routing ─────────────────────
+// User can add variant eye layers (`irides-l.smile`, `eyewhite-l.smile`,
+// etc.) AFTER importing a cmo3. The authored path can't rig new parts;
+// detect them and fall through to heuristic synthesis.
+{
+  // No scene → no authored path.
+  {
+    const r = planAuthoredPath({ nodes: [], _cmo3Scene: null });
+    assertEq(r.use, false, 'planAuthoredPath: no scene → use=false');
+    assertEq(r.reason, 'no-scene', 'planAuthoredPath: no scene → reason=no-scene');
+  }
+
+  // Scene with empty deformers → no authored path.
+  {
+    const r = planAuthoredPath({ nodes: [], _cmo3Scene: { parts: [], deformers: [] } });
+    assertEq(r.use, false, 'planAuthoredPath: empty deformers → use=false');
+    assertEq(r.reason, 'no-scene', 'planAuthoredPath: empty deformers → reason=no-scene');
+  }
+
+  // Authored, no new parts → use authored path.
+  {
+    const r = planAuthoredPath({
+      nodes: [
+        { id: 'n1', type: 'part', name: 'irides-l' },
+        { id: 'n2', type: 'part', name: 'eyewhite-l' },
+        { id: 'g1', type: 'group', name: 'face' },
+      ],
+      _cmo3Scene: {
+        parts: [{ name: 'irides-l' }, { name: 'eyewhite-l' }],
+        deformers: [{ kind: 'warp' }],
+      },
+    });
+    assertEq(r.use, true, 'planAuthoredPath: all parts known → use=true');
+    assertEq(r.reason, 'authored', 'planAuthoredPath: all parts known → reason=authored');
+    assertEq(r.newPartNames.length, 0, 'planAuthoredPath: no new parts reported');
+  }
+
+  // User added variant eye layers → stale scene → heuristic path.
+  {
+    const r = planAuthoredPath({
+      nodes: [
+        { id: 'n1', type: 'part', name: 'irides-l' },
+        { id: 'n2', type: 'part', name: 'eyewhite-l' },
+        { id: 'n3', type: 'part', name: 'irides-l.smile', variantSuffix: 'smile' },
+        { id: 'n4', type: 'part', name: 'eyewhite-l.smile', variantSuffix: 'smile' },
+      ],
+      _cmo3Scene: {
+        parts: [{ name: 'irides-l' }, { name: 'eyewhite-l' }],
+        deformers: [{ kind: 'warp' }],
+      },
+    });
+    assertEq(r.use, false, 'planAuthoredPath: stale scene → use=false');
+    assertEq(r.reason, 'stale-scene', 'planAuthoredPath: stale scene → reason=stale-scene');
+    assertEq(r.newPartNames.length, 2, 'planAuthoredPath: 2 new parts reported');
+    assert(r.newPartNames.includes('irides-l.smile'), 'planAuthoredPath: irides-l.smile flagged new');
+    assert(r.newPartNames.includes('eyewhite-l.smile'), 'planAuthoredPath: eyewhite-l.smile flagged new');
+    assertEq(r.firstNewPartVariant, 'smile', 'planAuthoredPath: firstNewPartVariant=smile');
+  }
+
+  // Mix: known parts + 1 new accessory (no variant suffix). Stale, but
+  // firstNewPartVariant stays null.
+  {
+    const r = planAuthoredPath({
+      nodes: [
+        { id: 'n1', type: 'part', name: 'irides-l' },
+        { id: 'n2', type: 'part', name: 'glasses' },
+      ],
+      _cmo3Scene: {
+        parts: [{ name: 'irides-l' }],
+        deformers: [{ kind: 'warp' }],
+      },
+    });
+    assertEq(r.use, false, 'planAuthoredPath: accessory added → use=false');
+    assertEq(r.reason, 'stale-scene', 'planAuthoredPath: accessory added → reason=stale-scene');
+    assertEq(r.newPartNames.length, 1, 'planAuthoredPath: 1 new part');
+    assertEq(r.firstNewPartVariant, null, 'planAuthoredPath: accessory not a variant → firstNewPartVariant=null');
+  }
+
+  // Empty / malformed part names skipped (don't false-trigger stale).
+  {
+    const r = planAuthoredPath({
+      nodes: [
+        { id: 'n1', type: 'part', name: 'irides-l' },
+        { id: 'n2', type: 'part', name: '' },           // empty name — skip
+        { id: 'n3', type: 'part' },                     // no name — skip
+        { id: 'n4', type: 'group', name: 'unknown' },   // not a part — skip
+      ],
+      _cmo3Scene: {
+        parts: [{ name: 'irides-l' }],
+        deformers: [{ kind: 'warp' }],
+      },
+    });
+    assertEq(r.use, true, 'planAuthoredPath: malformed nodes ignored → use=true');
+    assertEq(r.reason, 'authored', 'planAuthoredPath: malformed nodes ignored → reason=authored');
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
