@@ -174,25 +174,31 @@ export function evaluateFCurve(fcurve, time, evalContext = {}) {
   } else if (keyforms.length === 1) {
     baseValue = keyforms[0].value;
   } else {
-    // Find the bracketing keyframes via linear scan (binary search is
-    // cheap upgrade later; today's curves are 2-5 keyforms typically).
+    // Find the bracketing keyframes via binary search. Pre-fix this was
+    // a linear scan with a "today's curves are 2-5 keyforms typically"
+    // comment; record-mode action capture (post-2026-06-09) emits one
+    // keyform per driver per frame, so a 240-frame action has ~240
+    // keyforms per driver fcurve. Linear scan averaged N/2 = 120
+    // comparisons per eval × 13 drivers × per-render-tick. Binary search
+    // brings each eval to O(log K) ≈ 8 comparisons; mirrors what
+    // `interpolateTrack` (animationEngine path) already does.
     if (effectiveTime <= keyforms[0].time) {
       baseValue = keyforms[0].value;
     } else if (effectiveTime >= keyforms[keyforms.length - 1].time) {
       baseValue = keyforms[keyforms.length - 1].value;
     } else {
-      for (let i = 0; i < keyforms.length - 1; i++) {
-        const a = keyforms[i];
-        const b = keyforms[i + 1];
-        if (effectiveTime >= a.time && effectiveTime <= b.time) {
-          // Slice 2.C: full BezTriple evaluator — bezier (cubic-bezier
-          // inversion + value sampling), 10 named easings, plus the
-          // legacy linear/constant. Mirrors Blender's
-          // `fcurve_eval_keyframes_interpolate` (fcurve.cc:2026).
-          baseValue = evaluateBezTripleSegment(a, b, effectiveTime);
-          break;
-        }
+      let lo = 0;
+      let hi = keyforms.length - 2;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (keyforms[mid + 1].time <= effectiveTime) lo = mid + 1;
+        else hi = mid;
       }
+      // Slice 2.C: full BezTriple evaluator — bezier (cubic-bezier
+      // inversion + value sampling), 10 named easings, plus the
+      // legacy linear/constant. Mirrors Blender's
+      // `fcurve_eval_keyframes_interpolate` (fcurve.cc:2026).
+      baseValue = evaluateBezTripleSegment(keyforms[lo], keyforms[lo + 1], effectiveTime);
     }
   }
 
