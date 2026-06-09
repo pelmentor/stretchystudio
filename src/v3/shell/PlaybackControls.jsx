@@ -220,6 +220,12 @@ function AutoKeyModeDropdown({ disabled, project, update }) {
         p.autoKeyMode = next;
       }
     }, { skipHistory: true });
+    // Picking 'record' without the autoKey toggle being ON is a silent
+    // no-op (record-mode capture in CanvasViewport.jsx gates on both).
+    // Auto-arm the dot so picking the mode actually starts recording.
+    if (next === 'record') {
+      useEditorStore.getState().setAutoKeyframe(true);
+    }
   }
 
   return (

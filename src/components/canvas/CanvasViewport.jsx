@@ -995,34 +995,35 @@ export default function CanvasViewport({
             isDirtyRef.current = true;
 
             // AutoKey `record` mode — snapshot the just-written driver
-            // values into the active action's fcurves at the playhead
-            // frame. Gated on:
-            //   - editor is in animation mode (record makes no sense
-            //     in viewport/pose editing)
-            //   - `editor.autoKeyframe` is on (the record-record-dot
-            //     toggle that gates ALL auto-key flow)
+            // values into the active action's fcurves at the playhead's
+            // frame-snapped time. The user-facing contract is "when
+            // I'm on Live Preview with record mode on, the drivers I see
+            // get keyed". Hard gates kept minimal:
+            //   - `editor.autoKeyframe` ON (the red record-dot — explicit
+            //     consent that ANY auto-key should fire)
             //   - mode is 'record' (the dropdown next to the dot)
-            //   - playback is currently running (no point recording
-            //     while the user is scrubbing or stopped)
-            //   - the playhead has crossed into a new frame number
-            //     since the last write (rAF runs at ~60 Hz; the
-            //     action's fps is typically 24/30 — we'd write 2-3
-            //     duplicate keys per frame otherwise)
+            //   - an action is bound to the scene (else nothing to write)
+            // Soft gates dropped: editor-mode workspace (record makes
+            // sense anywhere the Live Preview surface runs) and isPlaying
+            // (recording while paused just replace-in-place at the current
+            // frame — useful as a "live snapshot per scrub position").
             const _projForKey = projectRef.current;
-            if (_projForKey
-                && getEditorMode() === 'animation'
-                && editorRef.current?.autoKeyframe
-                && getAutoKeyMode(_projForKey) === 'record'
-                && animRef.current?.isPlaying) {
+            const _shouldRecord = _projForKey
+              && editorRef.current?.autoKeyframe
+              && getAutoKeyMode(_projForKey) === 'record';
+            if (_shouldRecord) {
               const _anim = animRef.current;
               const _action = getActiveSceneAction(_projForKey, _anim.activeActionId);
               if (_action) {
                 const _fps = _action.fps ?? _anim.fps ?? 24;
                 const _frame = msToFrame(_anim.currentTime, _fps);
                 const _session = recordSessionRef.current;
-                if (!_session || _session.lastFrame !== _frame) {
+                if (!_session
+                    || _session.lastFrame !== _frame
+                    || _session.actionId !== _action.id) {
                   const _snappedMs = frameToMs(_frame, _fps);
-                  const _firstWriteOfSession = !_session?.snapshotTaken;
+                  const _firstWriteOfSession = !_session?.snapshotTaken
+                    || _session.actionId !== _action.id;
                   // First write of a session keeps history so Ctrl+Z
                   // restores the pre-record state; subsequent writes
                   // skipHistory so a 600-frame record doesn't make
@@ -1035,12 +1036,17 @@ export default function CanvasViewport({
                       insertKeyformAtInAction(a, rnaPath, _snappedMs, realUpdates[paramId], INSERTKEY_FLAGS.NOFLAGS);
                     }
                   }, { skipHistory: !_firstWriteOfSession });
-                  recordSessionRef.current = { lastFrame: _frame, snapshotTaken: true };
+                  recordSessionRef.current = {
+                    lastFrame: _frame,
+                    snapshotTaken: true,
+                    actionId: _action.id,
+                  };
                 }
               }
-            } else if (recordSessionRef.current && !animRef.current?.isPlaying) {
-              // Reset session when playback stops so the next play
-              // gets its own pre-record undo snapshot.
+            } else if (recordSessionRef.current) {
+              // Any gate (dot OFF / mode changed away from record / no
+              // action) closes the session, so a future re-arm gets its
+              // own pre-record undo snapshot.
               recordSessionRef.current = null;
             }
           }
