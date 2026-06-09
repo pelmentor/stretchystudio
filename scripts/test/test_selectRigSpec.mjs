@@ -414,6 +414,100 @@ function assertEq(actual, expected, name) {
   assert(Math.abs(x - 0.5) < 1e-6, 'chain: closure X(400) → 0.5 via lifted bbox');
 }
 
+// ── _warpRestPositions — symmetric binding interpolation (2026-06-09) ──
+//
+// Per-part rig warps bound to a symmetric param like ParamHairFront
+// (keys=[-1, 1]) carry NO keyform at the rest value (param=0). Pre-fix
+// `_pickRestKeyform` returned the nearest-tuple keyform (= one of the
+// sway extremes); its grid bbox was offset from the true rest by the
+// full sway magnitude. The cached vertex reprojection then round-tripped
+// through that offset bbox and produced 153 px hair drift when the user
+// disabled the hair subsystem.
+//
+// Post-fix: rest positions are the COMPONENT-WISE AVERAGE of all
+// keyforms — for symmetric (k[-N], k[+N]) bindings this equals the rest
+// grid exactly.
+
+import { _warpRestPositions } from '../../src/io/live2d/rig/selectRigSpec.js';
+
+{
+  // Symmetric ±20 px shift on X across two keyforms — average gives
+  // the EXACT centered rest grid back.
+  const warp = {
+    keyforms: [
+      { keyTuple: [-1], positions: [ 80, 100,  280, 100,  80, 300,  280, 300] },
+      { keyTuple: [ 1], positions: [120, 100,  320, 100, 120, 300,  320, 300] },
+    ],
+  };
+  const rest = _warpRestPositions(warp);
+  assert(rest && rest.length === 8, 'rest positions length');
+  if (rest) {
+    // Expected: avg = (80+120)/2=100, (280+320)/2=300, etc. — centered.
+    const expected = [100, 100, 300, 100, 100, 300, 300, 300];
+    for (let i = 0; i < expected.length; i++) {
+      assert(Math.abs(rest[i] - expected[i]) < 1e-5,
+        `symmetric binding rest[${i}]: ${expected[i]} (got ${rest[i]})`);
+    }
+  }
+}
+
+{
+  // Exact-rest keyform (tuple all-zero) wins over averaging — common case
+  // for warps with a key authored at param=0 (e.g. eye-closure keys [0, 1]).
+  const warp = {
+    keyforms: [
+      { keyTuple: [0], positions: [10, 20, 30, 40] }, // EXACT rest
+      { keyTuple: [1], positions: [99, 99, 99, 99] }, // would skew avg
+    ],
+  };
+  const rest = _warpRestPositions(warp);
+  if (rest) {
+    assert(rest[0] === 10 && rest[1] === 20 && rest[2] === 30 && rest[3] === 40,
+      'exact-rest tuple wins over averaging');
+  }
+}
+
+{
+  // Multi-dim tuple all-zero detected (e.g. 2D binding [eye-open, sway]).
+  const warp = {
+    keyforms: [
+      { keyTuple: [-1, -1], positions: [99, 99] },
+      { keyTuple: [ 0,  0], positions: [50, 50] },  // EXACT rest
+      { keyTuple: [ 1,  1], positions: [99, 99] },
+    ],
+  };
+  const rest = _warpRestPositions(warp);
+  if (rest) assert(rest[0] === 50 && rest[1] === 50,
+    'multi-dim all-zero tuple wins');
+}
+
+{
+  // Degenerate: no keyforms → null
+  assert(_warpRestPositions({ keyforms: [] }) === null, 'empty keyforms → null');
+  assert(_warpRestPositions({}) === null, 'no keyforms field → null');
+  // Keyforms with no positions → null
+  assert(_warpRestPositions({ keyforms: [{ keyTuple: [0] }] }) === null,
+    'keyforms without positions → null');
+}
+
+{
+  // 3 keyforms on symmetric body warp (e.g. ParamBodyAngleX keys [-10, 0, 10])
+  // Average of [k-, k0, k+] = k0 if symmetric. Exact-rest path catches k0 first.
+  const warp = {
+    keyforms: [
+      { keyTuple: [-10], positions: [ 90, 100,  290, 100,  90, 300,  290, 300] },
+      { keyTuple: [  0], positions: [100, 100,  300, 100, 100, 300,  300, 300] },
+      { keyTuple: [ 10], positions: [110, 100,  310, 100, 110, 300,  310, 300] },
+    ],
+  };
+  const rest = _warpRestPositions(warp);
+  if (rest) {
+    // Expect k0 verbatim (exact-rest path).
+    assert(rest[0] === 100 && rest[2] === 300,
+      'symmetric 3-key warp with rest=0: returns k0 verbatim');
+  }
+}
+
 // ── getRigSpec is alias of selectRigSpec ─────────────────────────
 
 {

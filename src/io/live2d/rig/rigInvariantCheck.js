@@ -314,14 +314,24 @@ export function runRigInvariantChecks(project) {
     if (!Array.isArray(n.modifiers) || n.modifiers.length === 0) {
       violate('I-1', n.id, n.name, `part has mesh (${vCount} verts) but modifiers[] is empty or missing → renderer will render at canvas origin`);
     } else {
-      // I-2: each modifier reference resolves
+      // I-2: each CHAIN modifier reference resolves
       // Field mapping (verified against ArmatureModifierService.js:315 +
       // synthesizeModifierStacks): the armature modifier uses `deformerId`
       // (set to the joint bone id), NOT `boneId`/`armatureId`. Treat the
-      // armature and non-lattice modifier refs uniformly.
+      // armature and non-lattice chain modifier refs uniformly.
+      //
+      // `physicsModifier` (per-node v50 port, 2026-06-08) is NOT a chain
+      // modifier — it lives in `node.modifiers[]` alongside deformation
+      // modifiers but its `inputs[]` / `output` shape is unrelated to
+      // the deformation graph. It carries no `deformerId` / `objectId`
+      // by design, so I-2 must skip it (otherwise every part with a
+      // physicsModifier flags spurious "empty deformerId" violations).
+      // Any future non-chain modifier type (constraint, hook, ...) must
+      // be added to this exemption.
       for (let i = 0; i < n.modifiers.length; i++) {
         const m = n.modifiers[i];
         if (!m) continue;
+        if (m.type === 'physicsModifier') continue;
         let refId = null;
         let refField = null;
         if (m.type === 'lattice') { refId = m.objectId; refField = 'objectId'; }

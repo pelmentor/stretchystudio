@@ -395,13 +395,78 @@ function _pickRestKeyform(spec) {
   return spec.keyforms[bestIdx];
 }
 
+/**
+ * Synthesize the warp's rest grid (positions at the binding's REST value)
+ * from its keyform list.
+ *
+ * Use case: per-part rig warps bound to a symmetric param like
+ * `ParamHairFront: keys=[-1, 1]` carry NO keyform at the rest value
+ * (param=0). `_pickRestKeyform`'s nearest-tuple pick lands on an arbitrary
+ * sway extreme (keyform[-1] = swung-LEFT) — its grid bbox is offset from
+ * the true rest by the full sway magnitude, producing 153 px+ drift when
+ * `_reprojectKeyformVerts` round-trips cached UV verts through that bbox
+ * (the user-reported "hair stretched/inverted after Init Rig with hair
+ * subsystem off" bug, 2026-06-09).
+ *
+ * Resolution:
+ *   1. If any keyform's tuple is all-zero → use its positions verbatim.
+ *      Covers warps with a key authored at the rest value (the most
+ *      common case, e.g. eye-closure with keys=[0, 1]).
+ *   2. Otherwise → average all keyform positions component-wise. For
+ *      symmetric sway (keys=[-N, N]) the average equals the rest grid
+ *      EXACTLY (since interpolation midpoint = (kLeft + kRight)/2).
+ *      For asymmetric grids it's the centroid — close enough to rest
+ *      that the bbox round-trip stays sub-pixel.
+ *
+ * @param {*} warpSpec
+ * @returns {Float32Array | null}
+ */
+export function _warpRestPositions(warpSpec) {
+  const keyforms = warpSpec?.keyforms;
+  if (!Array.isArray(keyforms) || keyforms.length === 0) return null;
+
+  // Exact-rest path: prefer a stored keyform at the all-zero tuple.
+  for (let i = 0; i < keyforms.length; i++) {
+    const tuple = keyforms[i].keyTuple ?? [];
+    let allZero = true;
+    for (const v of tuple) {
+      if (v !== 0) { allZero = false; break; }
+    }
+    if (allZero && keyforms[i].positions) {
+      return new Float32Array(keyforms[i].positions);
+    }
+  }
+
+  // Synthetic-rest path: component-wise average. Skips keyforms whose
+  // positions array has the wrong length (invariant: all keyforms share
+  // a vertex count — but defend against malformed seeds rather than
+  // throwing).
+  const refLen = keyforms[0].positions?.length ?? 0;
+  if (refLen === 0) return null;
+  const out = new Float32Array(refLen);
+  let counted = 0;
+  for (const kf of keyforms) {
+    const p = kf?.positions;
+    if (!p || p.length !== refLen) continue;
+    for (let i = 0; i < refLen; i++) out[i] += p[i];
+    counted++;
+  }
+  if (counted === 0) return null;
+  for (let i = 0; i < refLen; i++) out[i] /= counted;
+  return out;
+}
+
 function _liftWarpToCanvasAtRest(warp, allWarps, rotationRest, warpRest) {
   if (warpRest.has(warp.id)) return warpRest.get(warp.id).lifted;
   const byId = new Map(allWarps.map((w) => [w.id, w]));
-  const restKf = _pickRestKeyform(warp);
-  if (!restKf?.positions) return null;
+  // Use the SYNTHETIC rest positions (interpolated at the rest tuple),
+  // not the nearest-tuple keyform. See `_warpRestPositions` JSDoc for why
+  // (per-part rig warps bound to symmetric keys [-N, N] have no key at 0;
+  // averaging is required to reconstruct the rest grid).
+  const restPositions = _warpRestPositions(warp);
+  if (!restPositions) return null;
   // Root parent: positions ARE canvas-px.
-  if (warp.parent.type === 'root') return new Float64Array(restKf.positions);
+  if (warp.parent.type === 'root') return new Float64Array(restPositions);
   if (warp.parent.type === 'warp') {
     const parentSpec = byId.get(warp.parent.id);
     if (!parentSpec) return null;
@@ -410,31 +475,31 @@ function _liftWarpToCanvasAtRest(warp, allWarps, rotationRest, warpRest) {
       parentLifted = _liftWarpToCanvasAtRest(parentSpec, allWarps, rotationRest, warpRest);
       if (!parentLifted) return null;
     }
-    const inBuf = new Float32Array(restKf.positions);
-    const outBuf = new Float32Array(restKf.positions.length);
+    const inBuf = new Float32Array(restPositions);
+    const outBuf = new Float32Array(restPositions.length);
     evalWarpKernelCubism(
       parentLifted,
       parentSpec.gridSize,
       parentSpec.isQuadTransform === true,
       inBuf,
       outBuf,
-      restKf.positions.length / 2,
+      restPositions.length / 2,
     );
     return Float64Array.from(outBuf);
   }
   if (warp.parent.type === 'rotation') {
     const parentRest = rotationRest.get(warp.parent.id);
     if (!parentRest) return null;
-    const out = new Float64Array(restKf.positions.length);
+    const out = new Float64Array(restPositions.length);
     const px = parentRest.pivot.x, py = parentRest.pivot.y;
-    for (let i = 0; i < restKf.positions.length; i += 2) {
-      out[i]     = restKf.positions[i]     + px;
-      out[i + 1] = restKf.positions[i + 1] + py;
+    for (let i = 0; i < restPositions.length; i += 2) {
+      out[i]     = restPositions[i]     + px;
+      out[i + 1] = restPositions[i + 1] + py;
     }
     return out;
   }
   // Parent is a part / group — treat as canvas-px (same as root).
-  return new Float64Array(restKf.positions);
+  return new Float64Array(restPositions);
 }
 
 function _computeRotationCanvasPivotAtRest(rotation, warpRest, rotationRest) {
