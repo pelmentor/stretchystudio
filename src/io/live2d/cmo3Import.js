@@ -283,7 +283,11 @@ export async function importCmo3(bytes) {
     min: p.min,
     max: p.max,
     default: p.default,
-    decimalPlaces: 1,
+    // Preserve source precision when present. Default 3 (Cubism convention)
+    // when the source XML lacks the field — never silently drop to 1, which
+    // makes [0,1] params visibly stair through 11 states under smooth-sine
+    // drivers like CubismBreath. See paramSpec.js ParamSpec.decimalPlaces.
+    decimalPlaces: p.decimalPlaces ?? 3,
     repeat: false,
     role: p.id === 'ParamOpacity' ? 'opacity' : 'standard',
   }));

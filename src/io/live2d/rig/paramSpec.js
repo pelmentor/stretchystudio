@@ -23,7 +23,18 @@ import { getMesh } from '../../../store/objectDataAccess.js';
  * @property {number} min             - Minimum value
  * @property {number} max             - Maximum value
  * @property {number} default         - Default value (a.k.a. "rest")
- * @property {number} decimalPlaces   - Editor display precision (1 or 3)
+ * @property {number} decimalPlaces   - Runtime quantization precision. 1 for
+ *                                      boolean-like toggles (opacity, variant
+ *                                      0/1 fade), 3 for continuous numeric
+ *                                      params (Angle, Eye, Breath, bone
+ *                                      rotation, etc.) — matches Cubism's own
+ *                                      convention (every Hiyori param uses 3).
+ *                                      WITH decimalPlaces=1 a [0,1] param has
+ *                                      only 11 discrete states; Cubism's
+ *                                      smooth-sine default drivers visibly
+ *                                      stair through those states, worst at
+ *                                      the extremes where the derivative is
+ *                                      near zero.
  * @property {boolean} repeat         - Whether the parameter wraps (default false)
  * @property {('opacity'|'project'|'variant'|'standard'|'bone')} role
  *   Where the param came from. Lets writers attach role-specific behaviour
@@ -262,7 +273,7 @@ export function buildParameterSpec(input = {}) {
       push({
         id: sp.id, name: sp.name,
         min: sp.min, max: sp.max, default: sp.def,
-        decimalPlaces: 1, repeat: false,
+        decimalPlaces: 3, repeat: false,
         role: 'standard',
       });
     }
@@ -292,7 +303,7 @@ export function buildParameterSpec(input = {}) {
       min: bakedKeyformAngles[0],
       max: bakedKeyformAngles[bakedKeyformAngles.length - 1],
       default: 0,
-      decimalPlaces: 1, repeat: false,
+      decimalPlaces: 3, repeat: false,
       role: 'bone',
       boneId: m.jointBoneId,
     });
@@ -326,7 +337,7 @@ export function buildParameterSpec(input = {}) {
         id,
         name: `Rotation ${g.name ?? g.id}`,
         min: _ROT_PARAM_MIN, max: _ROT_PARAM_MAX, default: 0,
-        decimalPlaces: 1, repeat: false,
+        decimalPlaces: 3, repeat: false,
         role: 'rotation_deformer',
         groupId: g.id,
       });

@@ -131,7 +131,7 @@ export function emitRotationDeformers(x, opts) {
       paramDefs.push({
         pid: pidRotParam, id: rotParamId, name: `Rotation ${g.name || g.id}`,
         min: DEFORMER_ANGLE_MIN, max: DEFORMER_ANGLE_MAX, defaultVal: 0,
-        decimalPlaces: 1,
+        decimalPlaces: 3,
       });
     }
     deformerParamMap.set(g.id, {

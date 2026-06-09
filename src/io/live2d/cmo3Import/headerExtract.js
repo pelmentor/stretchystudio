@@ -61,12 +61,14 @@ export function readParameters(xml) {
     const defMatch = body.match(/<f\s+xs\.n="defaultValue">([^<]+)<\/f>/);
     const nameMatch = body.match(/<s\s+xs\.n="name">([^<]*)<\/s>/);
     const typeMatch = body.match(/<Type\s+xs\.n="paramType"\s+v="([^"]+)"\s*\/>/);
+    const decMatch = body.match(/<i\s+xs\.n="decimalPlaces">([^<]+)<\/i>/);
     out.push({
       id,
       name: nameMatch ? nameMatch[1] : '',
       min: minMatch ? Number(minMatch[1]) : 0,
       max: maxMatch ? Number(maxMatch[1]) : 1,
       default: defMatch ? Number(defMatch[1]) : 0,
+      decimalPlaces: decMatch ? Number(decMatch[1]) : 3,
       type: typeMatch ? typeMatch[1] : 'NORMAL',
     });
   }

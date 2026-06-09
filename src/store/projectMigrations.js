@@ -110,6 +110,7 @@ import { migrateRuntimeParentStrip } from './migrations/v47_runtime_parent_strip
 import { migrateRigParentStrip } from './migrations/v48_rig_parent_strip.js';
 import { migrateVariantVisibleToOpacity } from './migrations/v49_variant_visible_to_opacity.js';
 import { migratePhysicsModifierPerNode } from './migrations/v50_physics_modifier_per_node.js';
+import { migrateDecimalPlacesThree } from './migrations/v51_decimal_places_three.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -894,6 +895,22 @@ const MIGRATIONS = {
   // 2026-06-08 RULE №4 follow-up session entry.
   50: (project) => {
     migratePhysicsModifierPerNode(project);
+    return project;
+  },
+
+  // v51 — bump parameter.decimalPlaces from 1 to 3 for continuous params.
+  //
+  // Pre-v51 `paramSpec.buildParameterSpec` hardcoded `decimalPlaces: 1` for
+  // standard / bone / rotation_deformer roles. Cubism's moc3 runtime
+  // quantizes parameter values to this precision before warp evaluation,
+  // so a [0,1] param with decimalPlaces=1 has only 11 discrete states —
+  // CubismBreath's smooth sine driver visibly stairs through them at the
+  // extremes (where the derivative goes to zero). Hiyori uses 3 everywhere.
+  //
+  // See `src/store/migrations/v51_decimal_places_three.js` and the
+  // 2026-06-09 round-8 breath snap debug entry.
+  51: (project) => {
+    migrateDecimalPlacesThree(project);
     return project;
   },
 

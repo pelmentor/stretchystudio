@@ -378,7 +378,12 @@ function buildSectionData(input) {
   sections.set('parameter.min_values', paramList.map(p => p.min));
   sections.set('parameter.default_values', paramList.map(p => p.default));
   sections.set('parameter.repeats', paramList.map(p => p.repeat ?? false));
-  sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 1));
+  // 3 = Cubism convention for continuous params (Hiyori uses 3 everywhere).
+  // With 1, a [0,1] param has 11 discrete states; Cubism's smooth-sine
+  // drivers visibly stair through them, worst at the extremes where the
+  // derivative is near zero. paramSpec.js is the source of truth and sets
+  // this explicitly per role; this fallback only fires for buggy callers.
+  sections.set('parameter.decimal_places', paramList.map(p => p.decimalPlaces ?? 3));
 
 
   // --- Part Keyform sections ---

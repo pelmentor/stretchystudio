@@ -40,6 +40,10 @@ import { extractScene } from './cmo3PartExtract.js';
  * @property {number} min
  * @property {number} max
  * @property {number} default
+ * @property {number} decimalPlaces  Cubism runtime quantization precision
+ *                                   (0..N). Hiyori uses 3 for every continuous
+ *                                   param; SS uses 1 for boolean-like toggles
+ *                                   (opacity, variant) and 3 for the rest.
  * @property {string} type      Cubism "paramType" enum string (e.g. "NORMAL")
  */
 
@@ -156,6 +160,7 @@ function readParameters(xml, idPool) {
     const defMatch = body.match(/<f\s+xs\.n="defaultValue">([^<]+)<\/f>/);
     const nameMatch = body.match(/<s\s+xs\.n="name">([^<]*)<\/s>/);
     const typeMatch = body.match(/<Type\s+xs\.n="paramType"\s+v="([^"]+)"\s*\/>/);
+    const decMatch = body.match(/<i\s+xs\.n="decimalPlaces">([^<]+)<\/i>/);
 
     out.push({
       id,
@@ -163,6 +168,7 @@ function readParameters(xml, idPool) {
       min: minMatch ? Number(minMatch[1]) : 0,
       max: maxMatch ? Number(maxMatch[1]) : 1,
       default: defMatch ? Number(defMatch[1]) : 0,
+      decimalPlaces: decMatch ? Number(decMatch[1]) : 3,
       type: typeMatch ? typeMatch[1] : 'NORMAL',
     });
   }
