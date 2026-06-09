@@ -140,6 +140,7 @@ import {
   Upload,
   ChevronDown,
   Pencil,
+  X,
 } from 'lucide-react';
 import { parseMotion3Json } from '../../io/live2d/motion3jsonImport.js';
 import { uniqueName } from '../../lib/uniqueName.js';
@@ -402,6 +403,32 @@ export function PlaybackControls() {
     setRenamingActionId(null);
     setRenameDraft('');
   }, []);
+
+  /* ── Unbind / delete active action — Blender's `template_action` X ───
+   * Plain click: unbind the action from the scene's animData AND clear
+   * the UI-store fallback. The action stays in `project.actions[]`
+   * (recoverable via the picker). Mirrors Blender's
+   * `ANIM_OT_clear_action` (`source/blender/editors/animation/anim_ops.cc`).
+   *
+   * Shift+Click: also delete the action object entirely. Blender
+   * spells this "reduce user count to 0" — same end result for SS
+   * since we don't surface a user-count UI; the action object is gone
+   * either way.
+   */
+  const unbindAction = useCallback(() => {
+    useProjectStore.getState().unassignAction('__scene__');
+    useAnimationStore.getState().setActiveActionId(null);
+    useAnimationStore.getState().stop();
+  }, []);
+
+  const deleteActiveAction = useCallback(() => {
+    if (!animation) return;
+    if (!window.confirm(`Delete action "${animation.name ?? animation.id}"? This removes its keyframes from the project. Cannot be undone except via Ctrl+Z.`)) {
+      return;
+    }
+    useProjectStore.getState().unassignAction('__scene__');
+    useProjectStore.getState().deleteAction(animation.id);
+  }, [animation]);
 
   // Auto-focus + select-all when entering rename mode. Mirrors Blender's
   // begin-rename behaviour (input gets focus, full name selected so the
@@ -759,6 +786,10 @@ export function PlaybackControls() {
               value={animation?.id ?? ''}
               onChange={(e) => {
                 const id = e.target.value;
+                if (id === '') {
+                  unbindAction();
+                  return;
+                }
                 const a = proj.actions.find((x) => x.id === id);
                 const animApi = useAnimationStore.getState();
                 animApi.setActiveActionId(id);
@@ -772,30 +803,48 @@ export function PlaybackControls() {
                   animApi.seekFrame(0);
                 }
               }}
-              onDoubleClick={beginRename}
+              onDoubleClick={animation ? beginRename : undefined}
               className="h-6 text-[10px] px-1 rounded border border-border bg-background text-foreground max-w-[140px]"
-              title="Active action — switch to preview a different motion. Double-click (or F2) to rename. (Re-binds Scene when one is bound.)"
+              title="Active action — switch to preview a different motion. Pick (none) to free the timeline. Double-click (or F2) to rename. (Re-binds Scene when one is bound.)"
             >
+              <option value="">(none)</option>
               {proj.actions.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name ?? a.id}
                 </option>
               ))}
             </select>
-            {/* Pencil button — explicit rename trigger so the gesture
-                is discoverable. Double-click on the select + F2 keymap
-                are the keyboard-shortcut paths; this button is the
-                mouse-discoverable one. Mirrors how Blender's
-                template_action gives you both the inline text field AND
-                the surrounding browse widgets. */}
             <button
               type="button"
               onClick={beginRename}
-              className="h-6 px-1 rounded border border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors inline-flex items-center"
+              disabled={!animation}
+              className={cn(
+                'h-6 px-1 rounded border border-border text-muted-foreground inline-flex items-center transition-colors',
+                animation ? 'hover:bg-muted/50 hover:text-foreground' : 'opacity-30 cursor-not-allowed',
+              )}
               title="Rename action (F2)"
               aria-label="Rename active action"
             >
               <Pencil size={10} />
+            </button>
+            {/* Unlink — Blender's `template_action` X button. Plain click
+                clears the binding so the timeline is "free"; Shift+Click
+                also removes the action object from the project. */}
+            <button
+              type="button"
+              onClick={(e) => {
+                if (e.shiftKey) deleteActiveAction();
+                else unbindAction();
+              }}
+              disabled={!animation}
+              className={cn(
+                'h-6 px-1 rounded border border-border text-muted-foreground inline-flex items-center transition-colors',
+                animation ? 'hover:bg-destructive/15 hover:text-destructive hover:border-destructive/40' : 'opacity-30 cursor-not-allowed',
+              )}
+              title="Unbind action from timeline (Shift+Click: delete the action entirely)"
+              aria-label="Unbind active action"
+            >
+              <X size={10} />
             </button>
           </>
         )
