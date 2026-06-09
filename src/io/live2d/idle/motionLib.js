@@ -361,11 +361,28 @@ export function genSyllables({
 /**
  * Clamp keyframe values to [min, max]. Run AFTER any generator to guarantee
  * the model's parameter bounds are respected.
+ *
+ * Bezier handles are clamped IN LOCKSTEP with their owning keyform's value.
+ * Pre-2026-06-09 only `kf.value` was clamped — when amplitude × personality
+ * exceeded the param range (e.g. energetic's ampMul=1.5 took breath peaks
+ * from 1.0 to 1.25), the kf endpoints flattened to 1.0 but the handles
+ * still pointed at the un-clamped 1.18 / 1.25 values. Cubism's bezier
+ * playback then OVERSHOT past 1.0 and got clamped a second time by the
+ * runtime — visible as a snap/discontinuity at the param boundary that
+ * SS viewport (which uses live driver math, not the baked keyforms)
+ * never shows.
  */
+function clampHandle(h, min, max) {
+  if (!h || typeof h.value !== 'number') return h;
+  return { time: h.time, value: Math.max(min, Math.min(max, h.value)) };
+}
+
 export function clampKeyframes(keyframes, min, max) {
   return keyframes.map(kf => ({
     ...kf,
     value: Math.max(min, Math.min(max, kf.value)),
+    handleLeft:  clampHandle(kf.handleLeft,  min, max),
+    handleRight: clampHandle(kf.handleRight, min, max),
   }));
 }
 

@@ -52,6 +52,25 @@ const VALID_PERSONALITIES = new Set(PERSONALITY_PRESETS);
 function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
   const cfg = applyPersonality({ ...def.cfg }, personality);
 
+  // Pre-clamp amplitude so generated peaks/troughs land STRICTLY inside
+  // [defaultMin, defaultMax]. Otherwise a personality multiplier (e.g.
+  // energetic's ampMul=1.5) can take a [0,1]-range param past the
+  // boundary; clampKeyframes then flattens 3+ samples in a row to the
+  // bound value, the bezier handles still encode the un-clamped slope,
+  // and Cubism playback shows a visible snap at the param boundary.
+  // Mid is honoured as authored — if the user set mid=0.5 they want
+  // breath centered, so we reduce amplitude rather than re-center.
+  if ((def.kind === 'sine' || def.kind === 'wander')
+      && typeof cfg.amplitude === 'number'
+      && Number.isFinite(def.defaultMin)
+      && Number.isFinite(def.defaultMax)) {
+    const mid = cfg.mid ?? (def.kind === 'wander' ? def.defaultRest : 0);
+    const maxRoom = def.defaultMax - mid;
+    const minRoom = mid - def.defaultMin;
+    const maxAmp = Math.max(0, Math.min(maxRoom, minRoom));
+    if (cfg.amplitude > maxAmp) cfg.amplitude = maxAmp;
+  }
+
   let kfs;
   let shiftToRest = false;
 

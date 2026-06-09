@@ -130,5 +130,53 @@ expect('wander shiftToRest also shifts bezier handles', () => {
     `kfs[0].handleRight.value (${kf0.handleRight.value}) too far from kf.value (${kf0.value}) — shiftToRest didn't shift handles`);
 });
 
+// Regression — amplitude clamp + handle clamp eliminate the
+// "snap at extremes" bug. Pre-2026-06-09 'energetic' breath had
+// ampMul=1.5 → amp=0.75 → peaks at 1.25, clamped by clampKeyframes
+// to 1.0 across ~3 samples in a row → bezier handles still encoded
+// out-of-range slopes → Cubism overshoot + re-clamp = visible snap.
+// Pin: for every personality on a [0,1]-range breath param, NO
+// run of more than 1 consecutive samples may sit at 0 or 1, and
+// NO bezier control point may exceed the range.
+import { generateMotion3Json } from '../../src/io/live2d/motion3json.js';
+import { resultToSsAction } from '../../src/io/live2d/idle/builder.js';
+
+for (const personality of ['calm', 'energetic', 'tired', 'nervous']) {
+  expect(`${personality} breath has no clamp plateau / no out-of-range handles`, () => {
+    const r = buildMotion3({
+      preset: 'idle',
+      paramIds: ['ParamBreath'],
+      physicsOutputIds: new Set(),
+      durationSec: 10, fps: 60, personality, seed: 1,
+    });
+    const { action } = resultToSsAction(r);
+    const m3 = generateMotion3Json(action);
+    const segs = m3.Curves.find(c => c.Id === 'ParamBreath').Segments;
+
+    // Walk endpoints; count consecutive runs at exactly 0 or 1.
+    const ends = [{ t: segs[0], v: segs[1] }];
+    let i = 2;
+    while (i + 6 < segs.length) {
+      if (segs[i] === 1) { ends.push({ t: segs[i + 5], v: segs[i + 6] }); i += 7; }
+      else { ends.push({ t: segs[i + 1], v: segs[i + 2] }); i += 3; }
+    }
+    let run = 0, maxRun = 0;
+    for (const k of ends) {
+      if (k.v === 0 || k.v === 1) { run++; if (run > maxRun) maxRun = run; } else run = 0;
+    }
+    assert.ok(maxRun <= 1,
+      `${personality}: max consecutive samples at 0/1 must be <= 1, got ${maxRun}`);
+
+    // Bezier control points must stay inside [0, 1] (param range).
+    let oor = 0;
+    for (let j = 2; j + 6 < segs.length; j += 7) {
+      if (segs[j] !== 1) continue;
+      if (segs[j + 2] < -1e-3 || segs[j + 2] > 1 + 1e-3) oor++;
+      if (segs[j + 4] < -1e-3 || segs[j + 4] > 1 + 1e-3) oor++;
+    }
+    assert.ok(oor === 0, `${personality}: out-of-range bezier control points must be 0, got ${oor}`);
+  });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
