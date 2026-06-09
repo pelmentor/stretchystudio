@@ -99,10 +99,25 @@ export function buildKeyformBindings(opts) {
   // topo-sorted order — same as the deformer.* sections).
   // Orphan-param bindings come back as `null` from internBinding — drop
   // them so the object's band reflects only its live param drivers.
+  //
+  // Multi-binding meshes (compound eye closure × variant): `plan.bindings`
+  // is a non-empty array. Each entry interns separately and contributes
+  // to the mesh's band. Single-binding plans (the common case) use
+  // `plan.paramId` / `plan.keys` and degenerate to a 1-element binding
+  // list. Keyform order in `plan.keyformOpacities` is row-major over the
+  // bindings array, first-binding-varies-fastest — matches cmo3's
+  // `keyformsOnGrid` + Hiyori reference convention.
   /** @type {number[][]} */
   const meshObjectBindings = meshBindingPlan.map((plan) => {
-    const idx = internBinding(plan.paramId, plan.keys);
-    return idx === null ? [] : [idx];
+    const bindings = Array.isArray(plan.bindings) && plan.bindings.length > 0
+      ? plan.bindings
+      : [{ paramId: plan.paramId, keys: plan.keys }];
+    const idxs = [];
+    for (const b of bindings) {
+      const idx = internBinding(b.paramId, b.keys);
+      if (idx !== null) idxs.push(idx);
+    }
+    return idxs;
   });
   /** @type {number[][]} */
   const deformerObjectBindings = allDeformerSpecs.map((spec) =>
