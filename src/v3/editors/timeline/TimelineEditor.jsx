@@ -21,6 +21,7 @@ import {
   relocateActiveKeyformByObject,
 } from '@/anim/fcurveActiveKeyform';
 import { mergeDuplicateTimeKeys } from '@/anim/graphEditOps';
+import { applyTimeTranslate, remapHandlesAfterTranslate } from '@/anim/dopesheetGrab';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -795,6 +796,14 @@ export function TimelineEditor() {
   const [selectionBox, setSelectionBox] = useState(null); // {x, y, w, h}
   const [clipboard, setClipboard] = useState(null); // { properties: { prop: val }, easing: string }
 
+  // Drag ghost — non-null while a kf-drag is in flight. The project state
+  // is NOT mutated during drag (the ghost just shifts diamond rendering by
+  // `deltaFrames` for any kf in `draggedKey`). On pointerup the delta is
+  // committed atomically via `applyTimeTranslate`. See `onKeyframePointerDown`.
+  /** @typedef {{ draggedKey: Set<string>, deltaFrames: number, deltaMs: number }} DragGhost */
+  const [dragGhost, setDragGhost] = useState(/** @type {DragGhost|null} */ (null));
+  const dragGhostRef = useRef(/** @type {DragGhost|null} */ (null));
+
   // Ref to manage drag states without re-rendering continuously
   const dragCtx = useRef({
     type: null, // "playhead", "keyframe", "box", "loopStart", "loopEnd"
@@ -1336,197 +1345,169 @@ export function TimelineEditor() {
     window.addEventListener('pointerup', handleUp);
   }, [xToFrame, animSeekFrame, animStartFrame, animEndFrame, startMmbPan]);
 
-  // Keyframe clicking & dragging
+  // Keyframe drag — ghost during drag, applyTimeTranslate on commit
+  // (2026-06-09 pt6). Mirrors the Dopesheet's G modal pattern + the
+  // Blender TIME_TRANSLATE flow: the project is NOT mutated while the
+  // mouse is moving. Diamonds simply RENDER at `kf.time + ghostDeltaMs`
+  // for keys in the dragged set. On pointerup we apply the delta ONCE
+  // through `applyTimeTranslate` — same code path the Dopesheet uses,
+  // which handles sort + `mergeDuplicateTimeKeys` + `recalcKeyformHandles`
+  // atomically. This eliminates the entire class of per-tick-mutation
+  // bugs (`_dragId` aliasing, partial sorts, undo-batch corruption,
+  // float drift on roundtrip ms↔frame).
   //
-  // Identity-tracked drag (2026-06-09 pt5). Pre-fix: time-based re-find
-  // collapsed two selected kfs that converged to the same time, and
-  // incremental delta + Math.max(0, ...) clamping permanently fused kfs
-  // at frame 0. Bug visible to user as "drag corrupts and overrides many
-  // keyframes or puts them out of order" — selected kfs would smush into
-  // each other and non-selected neighbors would get steamrolled with no
-  // dedupe on commit.
-  //
-  // Now: at FIRST move, each selected kf gets a transient `_dragId`
-  // marker (parallel to the G modal's _grabId at line 1059). Per-tick
-  // moves find by _dragId, so coincident times can't aliased into the
-  // same kf. origTimeMs stays FIXED across ticks — newTime = origTime +
-  // (shared)Δframe. Δframe is clamped uniformly across the selection so
-  // nothing goes below frame 0 individually but the cluster keeps its
-  // shape. On pointerup commit: mergeDuplicateTimeKeys dedupes any
-  // selected-vs-non-selected collisions (selected wins, Blender's
-  // unconditional-delete branch at fcurve.cc:1902) + strip _dragId.
+  // Snap-to-extremes: while a drag is live we check whether the
+  // leftmost or rightmost dragged keyform's new frame is within
+  // SNAP_FRAMES of `animStartFrame` / `animEndFrame`. If so we adjust
+  // the shared delta so that boundary kf lands exactly on the extreme
+  // — magnetic snap, no hold-key needed (Blender's default snap mode
+  // in the dopesheet when "Auto-Merge Keyframes" is off).
   const onKeyframePointerDown = useCallback((e, rowKey, timeMs) => {
-    if (e.button !== 0) return;   // LMB only — MMB/RMB handled elsewhere
+    if (e.button !== 0) return;   // LMB only
     e.stopPropagation();
 
     const id = `${rowKey}:${timeMs}`;
     let newSel = new Set(selectedKeyframes);
-
-    // Shift click toggles selection
     if (e.shiftKey) {
       if (newSel.has(id)) newSel.delete(id);
       else newSel.add(id);
       setSelectedKeyframes(newSel);
-    }
-    // Normal click selects only this, unless it's already selected
-    else {
+    } else {
       if (!newSel.has(id)) {
         newSel = new Set([id]);
         setSelectedKeyframes(newSel);
       }
     }
 
-    // Snapshot orig data — find each selected kf, record origTimeMs +
-    // handle deltas. We DON'T tag _dragId yet: a pure click (no move)
-    // shouldn't mutate project state.
-    const orig = [];
+    // Snapshot drag items. Each entry pins (fcurveId, kfIdx, origTimeMs)
+    // — kfIdx is captured at drag-start; since the project isn't mutated
+    // during drag, the index stays valid.
+    /** @type {Array<{rowKey: string, fcurveId: string, kfIdx: number, origTimeMs: number}>} */
+    const items = [];
     if (animation) {
       for (const fc of animation.fcurves) {
         const target = decodeFCurveTarget(fc);
         if (!target) continue;
-        const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
-        for (const kf of fc.keyforms) {
+        const fcurveRowKey = target.kind === 'param'
+          ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        for (let kfIdx = 0; kfIdx < fc.keyforms.length; kfIdx++) {
+          const kf = fc.keyforms[kfIdx];
           if (newSel.has(`${fcurveRowKey}:${kf.time}`)) {
-            orig.push({
+            items.push({
               rowKey: fcurveRowKey,
-              paramId: target.kind === 'param' ? target.paramId : null,
-              trackNodeId: target.kind === 'node' ? target.nodeId : null,
-              prop: target.kind === 'node' ? target.property : null,
+              fcurveId: fc.id,
+              kfIdx,
               origTimeMs: kf.time,
-              origHandleLeftDt: kf.handleLeft ? kf.handleLeft.time - kf.time : 0,
-              origHandleRightDt: kf.handleRight ? kf.handleRight.time - kf.time : 0,
-              dragId: null,   // filled at first move
             });
           }
         }
       }
     }
+    if (items.length === 0) return;
 
-    if (orig.length === 0) return;
+    // Build the lookup Set for the diamond renderer (row-keyed by
+    // `${rowKey}:${origTimeMs}`). Multiple fcurves may contribute to
+    // one row (e.g. node row aggregates posX/posY); the Set holds the
+    // visual identity, not the per-fcurve identity.
+    const draggedKey = new Set(items.map((it) => `${it.rowKey}:${it.origTimeMs}`));
 
-    dragCtx.current = {
-      type: 'keyframe',
-      startX: e.clientX,
-      startFrame: msToFrame(timeMs, fps),
-      origKeyframes: orig,
-      tagged: false,
-      didMove: false,
+    const startCursorFrame = xToFrame(e.clientX);
+    const animMin = Math.max(0, animStartFrame);
+    const animMax = Math.max(animMin + 1, animEndFrame);
+    const SNAP_FRAMES = 2;
+
+    /** @param {number} rawDelta */
+    const applySnapAndClamp = (rawDelta) => {
+      // Compute the dragged cluster's extent at this raw delta.
+      let minNew = Infinity, maxNew = -Infinity;
+      for (const it of items) {
+        const f = msToFrame(it.origTimeMs, fps) + rawDelta;
+        if (f < minNew) minNew = f;
+        if (f > maxNew) maxNew = f;
+      }
+      // Hard floor: don't let the cluster's left edge go below 0
+      // (negative-frame data is fine for view-pan, but committing
+      // negative kf times is not supported by the eval engine).
+      let delta = rawDelta;
+      if (minNew < 0) delta += (0 - minNew);
+      // Re-derive after the floor.
+      minNew += (delta - rawDelta);
+      maxNew += (delta - rawDelta);
+      // Snap to extremes — pick the boundary nearest to a cluster
+      // endpoint; only snap if within SNAP_FRAMES.
+      const dMinToStart = Math.abs(minNew - animMin);
+      const dMaxToEnd   = Math.abs(maxNew - animMax);
+      let snapDelta = 0;
+      if (dMinToStart <= SNAP_FRAMES && dMinToStart <= dMaxToEnd) {
+        snapDelta = animMin - minNew;
+      } else if (dMaxToEnd <= SNAP_FRAMES) {
+        snapDelta = animMax - maxNew;
+      }
+      return delta + snapDelta;
     };
 
-    const findFc = (a, item) => (
-      item.paramId
-        ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
-        : a.fcurves.find((f) => {
-            const t = decodeFCurveTarget(f);
-            return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
-          })
-    );
-
+    let lastDelta = 0;
     const handleMove = (ev) => {
-      const dragFrameDelta = xToFrame(ev.clientX) - dragCtx.current.startFrame;
-      if (dragFrameDelta === 0 && !dragCtx.current.didMove) return;
-
-      // First-move bootstrap — open the undo batch and stamp each
-      // selected kf with a unique _dragId so future ticks find by
-      // identity, not by current time (which can alias).
-      if (!dragCtx.current.tagged) {
-        beginBatch(useProjectStore.getState().project);
-        let nextDragId = 1;
-        update((p) => {
-          const a = getActiveSceneAction(p, activeActionId);
-          if (!a) return;
-          for (const item of dragCtx.current.origKeyframes) {
-            const fc = findFc(a, item);
-            if (!fc) continue;
-            const kf = fc.keyforms.find((k) => k.time === item.origTimeMs);
-            if (!kf) continue;
-            const dragId = nextDragId++;
-            kf._dragId = dragId;
-            item.dragId = dragId;
-          }
-        }, { skipHistory: true });
-        dragCtx.current.tagged = true;
-      }
-
-      // Shared-clamp Δ so the cluster keeps its shape: shrink Δ as
-      // needed so no item's newFrame would go below 0. Pre-fix
-      // per-item Math.max(0, ...) silently collapsed nearby items.
-      let minDelta = dragFrameDelta;
-      for (const item of dragCtx.current.origKeyframes) {
-        const origFrame = msToFrame(item.origTimeMs, fps);
-        if (origFrame + minDelta < 0) minDelta = -origFrame;
-      }
-      dragCtx.current.didMove = true;
-
-      const nextSel = new Set();
-      update((p) => {
-        const a = getActiveSceneAction(p, activeActionId);
-        if (!a) return;
-        for (const item of dragCtx.current.origKeyframes) {
-          if (item.dragId == null) continue;
-          const fc = findFc(a, item);
-          if (!fc) continue;
-          const kf = fc.keyforms.find((k) => k._dragId === item.dragId);
-          if (!kf) continue;
-          const newFrame = msToFrame(item.origTimeMs, fps) + minDelta;
-          const newTime = frameToMs(newFrame, fps);
-          kf.time = newTime;
-          if (kf.handleLeft) kf.handleLeft.time = newTime + item.origHandleLeftDt;
-          if (kf.handleRight) kf.handleRight.time = newTime + item.origHandleRightDt;
-          nextSel.add(`${item.rowKey}:${newTime}`);
-        }
-        // Sort fcurves by time. Active-halo capture/relocate keeps the
-        // Graph Editor halo pinned to its kf object across reorder
-        // (audit-fix HIGH-A3, Slice 5.H 2026-05-16).
-        for (const f of a.fcurves) {
-          const capturedActive = captureActiveKeyformObject(f);
-          f.keyforms.sort((k1, k2) => k1.time - k2.time);
-          relocateActiveKeyformByObject(a, f.id, capturedActive);
-        }
-      }, { skipHistory: true });
-
-      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
+      const rawDelta = xToFrame(ev.clientX) - startCursorFrame;
+      const delta = applySnapAndClamp(rawDelta);
+      if (delta === lastDelta && dragGhostRef.current) return;
+      lastDelta = delta;
+      const ghost = {
+        draggedKey,
+        deltaFrames: delta,
+        deltaMs: frameToMs(delta, fps),
+      };
+      dragGhostRef.current = ghost;
+      setDragGhost(ghost);
     };
 
     const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
-      dragCtx.current.type = null;
+      const ghost = dragGhostRef.current;
+      dragGhostRef.current = null;
+      setDragGhost(null);
+      if (!ghost || ghost.deltaFrames === 0) return;
 
-      if (!dragCtx.current.tagged) return;   // pure click — nothing to commit
+      // Build handles map for applyTimeTranslate: Map<fcurveId,
+      // Map<kfIdx, {center:true,left:false,right:false}>>.
+      /** @type {Map<string, Map<number, {center:true,left:false,right:false}>>} */
+      const handles = new Map();
+      for (const it of items) {
+        let sub = handles.get(it.fcurveId);
+        if (!sub) { sub = new Map(); handles.set(it.fcurveId, sub); }
+        sub.set(it.kfIdx, { center: true, left: false, right: false });
+      }
 
-      // Commit: dedupe selected-vs-non-selected collisions, then strip
-      // every _dragId tag and rebuild the selection set from survivors.
+      beginBatch(useProjectStore.getState().project);
+      // Build the post-translate selection INSIDE the update callback
+      // — `applyTimeTranslate` mutates the immer draft, and reading
+      // `kf.time` after the recipe returns would touch a revoked proxy.
+      // Snapshot the (rowKey:time) pairs into a plain Set while the
+      // draft is live; the Set survives finalization.
       const nextSel = new Set();
       update((p) => {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
-        for (const fc of a.fcurves) {
-          const sel = new Map();
-          for (let i = 0; i < fc.keyforms.length; i++) {
-            if (fc.keyforms[i]._dragId != null) sel.set(i, { center: true });
-          }
-          if (sel.size > 0) mergeDuplicateTimeKeys(fc, sel, 0.5);
-          const target = decodeFCurveTarget(fc);
-          const fcurveRowKey = target
-            ? (target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`)
-            : null;
-          for (const k of fc.keyforms) {
-            if (k._dragId != null) {
-              delete k._dragId;
-              if (fcurveRowKey) nextSel.add(`${fcurveRowKey}:${k.time}`);
-            }
-          }
+        const { changed, remaps } = applyTimeTranslate(a, handles, ghost.deltaMs);
+        if (!changed) return;
+        for (const it of items) {
+          const fcRemap = remaps.get(it.fcurveId);
+          const newIdx = fcRemap?.get(it.kfIdx);
+          if (typeof newIdx !== 'number' || newIdx < 0) continue;
+          const fc = a.fcurves.find((f) => f.id === it.fcurveId);
+          if (!fc) continue;
+          const newKf = fc.keyforms[newIdx];
+          if (!newKf) continue;
+          nextSel.add(`${it.rowKey}:${newKf.time}`);
         }
-      }, { skipHistory: !dragCtx.current.didMove });
-
-      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
+      });
       endBatch();
+      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
-
-  }, [selectedKeyframes, animation, activeActionId, fps, xToFrame, update]);
+  }, [selectedKeyframes, animation, activeActionId, fps, xToFrame, update, animStartFrame, animEndFrame]);
 
   // Box Selection
   const onTrackAreaPointerDown = useCallback((e) => {
@@ -2023,8 +2004,34 @@ export function TimelineEditor() {
               </div>
             </div>
 
+            {/* Playable range band — highlights [animStartFrame, animEndFrame]
+                with a subtle tinted background + flanking edge markers.
+                Outside-the-range area is dimmed by an overlay (above the
+                grid but below ticks/diamonds). Frames OUTSIDE the band
+                are still selectable + render kfs, they just sit on the
+                dimmed margin so the user can see at a glance which range
+                actually plays. */}
+            {(() => {
+              const animMin = Math.max(0, animStartFrame);
+              const animMax = Math.max(animMin + 1, animEndFrame);
+              const leftPct = ((animMin - startFrame) / totalFrames) * 100;
+              const rightPct = ((animMax - startFrame) / totalFrames) * 100;
+              return (
+                <div className="absolute inset-0 pointer-events-none z-0" style={{ top: RULER_H, left: LABEL_W }}>
+                  <div className="absolute inset-y-0" style={{ left: TRACK_PAD, right: TRACK_PAD }}>
+                    {/* Pre-range dim */}
+                    <div className="absolute top-0 bottom-0 bg-black/30" style={{ left: 0, width: `${Math.max(0, leftPct)}%` }} />
+                    {/* Playable band */}
+                    <div className="absolute top-0 bottom-0 bg-primary/[0.06] border-x border-primary/30" style={{ left: `${leftPct}%`, width: `${Math.max(0, rightPct - leftPct)}%` }} />
+                    {/* Post-range dim */}
+                    <div className="absolute top-0 bottom-0 bg-black/30" style={{ left: `${rightPct}%`, right: 0 }} />
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Frame Dividers (Subtle Vertical Grid) */}
-            <div className="absolute inset-0 pointer-events-none" style={{ top: RULER_H, left: LABEL_W }}>
+            <div className="absolute inset-0 pointer-events-none z-[1]" style={{ top: RULER_H, left: LABEL_W }}>
               <div className="absolute inset-y-0" style={{ left: TRACK_PAD, right: TRACK_PAD }}>
                 {rulerTicks.map(f => (
                   <div
@@ -2119,22 +2126,14 @@ export function TimelineEditor() {
                     </svg>
 
                     {row.times.map(timeMs => {
-                      const frame = msToFrame(timeMs, fps);
-                      // No `if (frac < 0 || frac > 1) return null` clip.
-                      // Pre-fix, dragging keyframes past frame 0 or past
-                      // endFrame made the diamonds disappear visually
-                      // even though their data still existed — so they
-                      // played back wrong (key was there in the data,
-                      // contributing to the curve, but the user couldn't
-                      // see or grab them to drag back). Blender renders
-                      // out-of-range keys at negative/over-100% positions
-                      // and the user pans the timeline to see them; SS
-                      // now does the same — the track area has horizontal
-                      // overflow, so off-range diamonds sit just past the
-                      // visible edge. Still keyed via the box-select +
-                      // KeyA operators (those walk row.times directly,
-                      // not the rendered DOM).
                       const isSelected = selectedKeyframes.has(`${row.rowKey}:${timeMs}`);
+                      // Ghost drag: while a kf is being moved by the user,
+                      // its diamond renders at `frame + ghostDelta` instead
+                      // of its committed time — the project itself isn't
+                      // mutated until pointerup (see `onKeyframePointerDown`).
+                      const isDragging = dragGhost?.draggedKey.has(`${row.rowKey}:${timeMs}`) ?? false;
+                      const frame = msToFrame(timeMs, fps)
+                        + (isDragging ? dragGhost.deltaFrames : 0);
 
                       return (
                         <ContextMenu key={timeMs}>
@@ -2147,6 +2146,7 @@ export function TimelineEditor() {
                                 'rotate-45 border transition-colors z-20 keyframe-diamond',
                                 isSelected ? 'bg-primary border-primary shadow-[0_0_4px_rgba(255,255,255,0.5)]'
                                   : 'bg-background border-primary/60 hover:bg-primary/40',
+                                isDragging ? 'ring-2 ring-amber-300/80' : '',
                               ].join(' ')}
                               style={{ left: frameToPercentage(frame) }}
                             />

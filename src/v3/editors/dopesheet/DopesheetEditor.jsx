@@ -116,6 +116,9 @@ export function DopesheetEditor() {
   const projectActions = useProjectStore((s) => s.project.actions);
   const updateProject  = useProjectStore((s) => s.updateProject);
   const activeActionId = useAnimationStore((s) => s.activeActionId);
+  const animStartFrame = useAnimationStore((s) => s.startFrame);
+  const animEndFrame   = useAnimationStore((s) => s.endFrame);
+  const animFps        = useAnimationStore((s) => s.fps);
   const selection = useSelectionStore((s) => s.items);
   // NOTE: `currentTime` is intentionally NOT subscribed at the parent
   // level. Pre-fix the whole DopesheetEditor (incl. every Row + every
@@ -1315,6 +1318,29 @@ export function DopesheetEditor() {
             onPointerUp={handleTrackPointerUp}
             onPointerCancel={handleTrackPointerUp}
           >
+            {/* Playable [animStart, animEnd] band — sits behind every row
+                via a single full-area overlay so the band scales with the
+                track-area height as rows are added. Outside the band is
+                dimmed; inside is tinted with a primary halo. Anchored at
+                LABEL_W so the row-label column stays unaffected. */}
+            {(() => {
+              const fps = Math.max(1, animFps);
+              const startMs = (Math.max(0, animStartFrame) / fps) * 1000;
+              const endMs   = (Math.max(animStartFrame + 1, animEndFrame) / fps) * 1000;
+              const span = Math.max(1, viewEndMs - viewStartMs);
+              const leftPct  = ((startMs - viewStartMs) / span) * 100;
+              const rightPct = ((endMs   - viewStartMs) / span) * 100;
+              return (
+                <div
+                  className="absolute top-0 bottom-0 pointer-events-none z-0"
+                  style={{ left: LABEL_W, right: 0 }}
+                >
+                  <div className="absolute top-0 bottom-0 bg-black/30" style={{ left: 0, width: `${Math.max(0, leftPct)}%` }} />
+                  <div className="absolute top-0 bottom-0 bg-primary/[0.06] border-x border-primary/30" style={{ left: `${leftPct}%`, width: `${Math.max(0, rightPct - leftPct)}%` }} />
+                  <div className="absolute top-0 bottom-0 bg-black/30" style={{ left: `${rightPct}%`, right: 0 }} />
+                </div>
+              );
+            })()}
             {rows.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground italic">
                 Action has no fcurves yet — drop into the Timeline + use auto-keyframe.
