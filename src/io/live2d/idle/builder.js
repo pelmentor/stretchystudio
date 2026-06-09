@@ -123,7 +123,24 @@ function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
   if (shiftToRest && kfs.length >= 2) {
     const offset = def.defaultRest - kfs[0].value;
     if (Math.abs(offset) > 1e-6) {
-      kfs = kfs.map(kf => ({ ...kf, value: kf.value + offset }));
+      // Shift the BEZIER HANDLES with the value. They're absolute (time,
+      // value) coordinates — leaving them at the pre-shift y position
+      // creates wild bezier overshoot between every pair of keyforms,
+      // visible as a parkinsonian high-frequency oscillation on the
+      // F-curve panel for every wander-driven param (head angles, eyeball
+      // drift). Latent until 2026-06-09 because `recalcKeyformHandles`
+      // used to overwrite analytical handles with vector ones; once
+      // handleType:free/free preserved them, the offset became visible.
+      kfs = kfs.map(kf => ({
+        ...kf,
+        value: kf.value + offset,
+        handleLeft:  kf.handleLeft
+          ? { time: kf.handleLeft.time,  value: kf.handleLeft.value  + offset }
+          : kf.handleLeft,
+        handleRight: kf.handleRight
+          ? { time: kf.handleRight.time, value: kf.handleRight.value + offset }
+          : kf.handleRight,
+      }));
     }
   }
 
