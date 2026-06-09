@@ -506,7 +506,7 @@ export function PlaybackControls() {
       p.actions.push({
         id,
         name: 'Action 1',
-        duration: 2000,
+        duration: 10000,
         fps: 24,
         fcurves: [],
         audioTracks: [],
@@ -517,7 +517,8 @@ export function PlaybackControls() {
     const a = useAnimationStore.getState();
     a.setActiveActionId(id);
     a.setFps(24);
-    a.setEndFrame(48);
+    a.setStartFrame(1);
+    a.setEndFrame(240);
     return id;
   }, [proj.actions, update]);
 
@@ -564,7 +565,7 @@ export function PlaybackControls() {
       p.actions.push({
         id,
         name: `Action ${n}`,
-        duration: 2000,
+        duration: 10000,
         fps: 24,
         fcurves: [],
         audioTracks: [],
@@ -575,8 +576,9 @@ export function PlaybackControls() {
     const a = useAnimationStore.getState();
     a.setActiveActionId(id);
     a.setFps(24);
-    a.setEndFrame(48);
-    a.seekFrame(0);
+    a.setStartFrame(1);
+    a.setEndFrame(240);
+    a.seekFrame(1);
     return id;
   }, [proj.actions.length, update]);
 

@@ -34,9 +34,11 @@ export const useAnimationStore = create((set, get) => ({
   /** FPS for this clip (also stored on animation object, but mirrored here for transport controls) */
   fps: 24,
 
-  /** Loop window, in frames */
-  startFrame: 0,
-  endFrame: 48,
+  /** Loop window, in frames. Blender's default action range is 1-240
+   * (10 sec @ 24fps). Frame 1 is the canonical start (frame 0 reserved
+   * for "rest pose" pre-frame in some setups). */
+  startFrame: 1,
+  endFrame: 240,
 
   /** Playback speed multiplier (0 = paused, 1 = normal, 2 = double, etc.) */
   speed: 1.0,
@@ -209,8 +211,8 @@ export const useAnimationStore = create((set, get) => ({
       draftPose:         new Map(),
       loopCount:         0,
       // start/end frames derived from duration if not present
-      startFrame:        0,
-      endFrame:          Math.round(((action.duration ?? 2000) / 1000) * (action.fps ?? 24)),
+      startFrame:        1,
+      endFrame:          Math.max(2, Math.round(((action.duration ?? 10000) / 1000) * (action.fps ?? 24))),
     });
   },
 
@@ -222,8 +224,8 @@ export const useAnimationStore = create((set, get) => ({
     _lastTimestamp:    null,
     restPose:          new Map(),
     draftPose:         new Map(),
-    startFrame:        0,
-    endFrame:          48,
+    startFrame:        1,
+    endFrame:          240,
     fps:               24,
     loopKeyframes:     true,
     loopCount:         0,
