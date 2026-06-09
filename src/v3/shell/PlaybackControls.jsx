@@ -141,9 +141,11 @@ import {
   ChevronDown,
   Pencil,
   X,
+  Infinity as InfinityIcon,
 } from 'lucide-react';
 import { parseMotion3Json } from '../../io/live2d/motion3jsonImport.js';
 import { uniqueName } from '../../lib/uniqueName.js';
+import { loopifyAction } from '../../anim/loopifyAction.js';
 import { getActiveSceneAction, getSceneAction } from '../../anim/sceneAction.js';
 import { AUTOKEY_MODES, getAutoKeyMode } from '../../anim/autoKeyDispatch.js';
 import {
@@ -431,6 +433,21 @@ export function PlaybackControls() {
     useProjectStore.getState().unassignAction('__scene__');
     useProjectStore.getState().deleteAction(animation.id);
   }, [animation]);
+
+  /* ── Loop-ify — snap action endpoints so it cycles seamlessly ────────
+   * Per fcurve: copies startKf's value and outgoing tangent onto endKf
+   * (inserting a kf at t=duration if there isn't one already), so
+   * playback wraps without a velocity discontinuity. Idempotent — run
+   * twice and you get the same shape.
+   */
+  const loopifyActiveAction = useCallback(() => {
+    if (!animation) return;
+    update((p) => {
+      const a = (p.actions ?? []).find((x) => x.id === animation.id);
+      if (!a) return;
+      loopifyAction(a);
+    });
+  }, [animation, update]);
 
   // Auto-focus + select-all when entering rename mode. Mirrors Blender's
   // begin-rename behaviour (input gets focus, full name selected so the
@@ -847,6 +864,21 @@ export function PlaybackControls() {
               aria-label="Unbind active action"
             >
               <X size={10} />
+            </button>
+            {/* Loop-ify — snap every fcurve's end to match its start so
+                the action wraps seamlessly. One click; idempotent. */}
+            <button
+              type="button"
+              onClick={loopifyActiveAction}
+              disabled={!animation}
+              className={cn(
+                'h-6 px-1 rounded border border-border text-muted-foreground inline-flex items-center transition-colors',
+                animation ? 'hover:bg-muted/50 hover:text-foreground' : 'opacity-30 cursor-not-allowed',
+              )}
+              title="Loop-ify: pin each fcurve's end keyframe to its start so the action wraps seamlessly. Inserts the end key if missing."
+              aria-label="Loop-ify active action"
+            >
+              <InfinityIcon size={10} />
             </button>
           </>
         )
