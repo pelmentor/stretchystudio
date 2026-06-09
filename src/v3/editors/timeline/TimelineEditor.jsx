@@ -852,34 +852,68 @@ export function TimelineEditor() {
   useEffect(() => { selectedKeyframesRefForG.current = selectedKeyframes; }, [selectedKeyframes]);
   useEffect(() => { fpsRefForG.current = fps; }, [fps]);
   useEffect(() => {
+    // Locate the kf the item refers to. When the modal was entered via
+    // Shift+D (duplicate-and-grab), the original kf and its clone share
+    // the same time — so time-based find() is ambiguous. We mark every
+    // clone with a transient `_grabId` and match on that when present;
+    // bare G's modal (no duplicates) falls through to time-based find.
+    const findKf = (fc, item) => {
+      if (item.grabId != null) {
+        const byId = fc.keyforms.find((k) => k._grabId === item.grabId);
+        if (byId) return byId;
+      }
+      return fc.keyforms.find((k) => k.time === item.currentTimeMs);
+    };
+    const findFc = (a, item) => (
+      item.paramId
+        ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
+        : a.fcurves.find((f) => {
+            const t = decodeFCurveTarget(f);
+            return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
+          })
+    );
     const exitGrab = (commit) => {
       const g = grabStateRef.current;
       if (!g) return;
-      if (!commit) {
-        // Cancel — restore original times for every grabbed kf.
-        update((p) => {
-          const a = getActiveSceneAction(p, activeActionId);
-          if (!a) return;
-          for (const item of g.origByItem) {
-            const fc = item.paramId
-              ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
-              : a.fcurves.find((f) => {
-                  const t = decodeFCurveTarget(f);
-                  return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
-                });
-            if (!fc) continue;
-            // The kf was renamed by mutating .time; we tracked the
-            // CURRENT time on `g` so find by that and restore.
-            const kf = fc.keyforms.find((k) => k.time === item.currentTimeMs);
-            if (kf) kf.time = item.origTimeMs;
+      update((p) => {
+        const a = getActiveSceneAction(p, activeActionId);
+        if (!a) return;
+        if (!commit) {
+          if (g.isDuplicate) {
+            // Cancel a Shift+D — remove the clones entirely (they were
+            // created by this modal; abandoning leaves the originals
+            // untouched).
+            for (const fc of a.fcurves) {
+              fc.keyforms = fc.keyforms.filter((k) => k._grabId == null);
+            }
+          } else {
+            // Cancel a bare G — restore original times.
+            for (const item of g.origByItem) {
+              const fc = findFc(a, item);
+              if (!fc) continue;
+              const kf = findKf(fc, item);
+              if (kf) kf.time = item.origTimeMs;
+            }
           }
-          for (const f of a.fcurves) {
-            const cap = captureActiveKeyformObject(f);
-            f.keyforms.sort((k1, k2) => k1.time - k2.time);
-            relocateActiveKeyformByObject(a, f.id, cap);
+        } else if (g.isDuplicate) {
+          // Commit a Shift+D — clones become permanent. Strip _grabId
+          // so they're indistinguishable from any other kf.
+          for (const fc of a.fcurves) {
+            for (const k of fc.keyforms) {
+              if (k._grabId != null) delete k._grabId;
+            }
           }
-        }, { skipHistory: true });
-      }
+        }
+        // Always re-sort + restore active halo at exit.
+        for (const f of a.fcurves) {
+          const cap = captureActiveKeyformObject(f);
+          f.keyforms.sort((k1, k2) => k1.time - k2.time);
+          relocateActiveKeyformByObject(a, f.id, cap);
+        }
+        if (!commit && g.isDuplicate) {
+          a.fcurves = a.fcurves.filter((f) => f.keyforms.length > 0);
+        }
+      }, { skipHistory: !commit });
       endBatch();
       grabStateRef.current = null;
       window.removeEventListener('pointermove', onPtrMove, true);
@@ -897,14 +931,9 @@ export function TimelineEditor() {
         const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
         for (const item of g.origByItem) {
-          const fc = item.paramId
-            ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
-            : a.fcurves.find((f) => {
-                const t = decodeFCurveTarget(f);
-                return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
-              });
+          const fc = findFc(a, item);
           if (!fc) continue;
-          const kf = fc.keyforms.find((k) => k.time === item.currentTimeMs);
+          const kf = findKf(fc, item);
           if (!kf) continue;
           const newFrame = msToFrame(item.origTimeMs, fpsRefForG.current) + dragFrameDelta;
           const newTime = frameToMs(newFrame, fpsRefForG.current);
@@ -985,9 +1014,82 @@ export function TimelineEditor() {
       window.addEventListener('pointerdown', onPtrDown, true);
       window.addEventListener('keydown', onModalKey, true);
     };
+    const onShiftD = (ev) => {
+      if (!hoverRef.current) return;
+      if (ev.code !== 'KeyD') return;
+      if (!ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const t = /** @type {HTMLElement|null} */ (ev.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (grabStateRef.current) return;
+      const sel = selectedKeyframesRefForG.current;
+      if (!sel || sel.size === 0) return;
+      const anim = animationRefForG.current;
+      if (!anim) return;
+      const anchorX = lastPointerXRef.current;
+      if (typeof anchorX !== 'number') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      // Clone selected kfs in-place + tag each clone with a unique
+      // _grabId so the G modal's findKf disambiguates the dup from its
+      // original (they share .time at duplicate creation). Mirrors
+      // Blender's `ACTION_OT_duplicate_move` macro at
+      // `editors/space_action/action_ops.cc:80-89` —
+      // `ACTION_OT_duplicate` populates the new kfs, then chains
+      // `TRANSFORM_OT_transform mode='TIME_TRANSLATE'` as the modal.
+      const origByItem = [];
+      let nextGrabId = (grabStateRef._idSeq ?? 0) + 1;
+      beginBatch(useProjectStore.getState().project);
+      update((p) => {
+        const a = getActiveSceneAction(p, activeActionId);
+        if (!a) return;
+        for (const fc of a.fcurves) {
+          const target = decodeFCurveTarget(fc);
+          if (!target) continue;
+          const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+          const clones = [];
+          for (const kf of fc.keyforms) {
+            if (sel.has(`${fcurveRowKey}:${kf.time}`)) {
+              const grabId = nextGrabId++;
+              // Structured clone so handleLeft/handleRight/handleType
+              // / interpolation / flag all come along. Plain
+              // JSON-round-trip would drop functions — none here, so
+              // it's safe and ~5× cheaper than deep-copy libs.
+              const clone = JSON.parse(JSON.stringify(kf));
+              clone._grabId = grabId;
+              clones.push(clone);
+              origByItem.push({
+                rowKey: fcurveRowKey,
+                paramId: target.kind === 'param' ? target.paramId : null,
+                trackNodeId: target.kind === 'node' ? target.nodeId : null,
+                prop: target.kind === 'node' ? target.property : null,
+                origTimeMs: kf.time,
+                currentTimeMs: kf.time,
+                grabId,
+              });
+            }
+          }
+          for (const c of clones) fc.keyforms.push(c);
+        }
+      }, { skipHistory: true });
+      if (origByItem.length === 0) {
+        endBatch();
+        return;
+      }
+      // Selection follows the duplicates (same time as originals — the
+      // visual overlap is intentional; user drags them clear).
+      grabStateRef.current = {
+        anchorX, origByItem, lastDelta: 0, isDuplicate: true,
+      };
+      window.addEventListener('pointermove', onPtrMove, true);
+      window.addEventListener('pointerdown', onPtrDown, true);
+      window.addEventListener('keydown', onModalKey, true);
+    };
     window.addEventListener('keydown', onKeyG, { capture: true });
+    window.addEventListener('keydown', onShiftD, { capture: true });
     return () => {
       window.removeEventListener('keydown', onKeyG, { capture: true });
+      window.removeEventListener('keydown', onShiftD, { capture: true });
       // If unmounting mid-grab, restore + cleanup.
       if (grabStateRef.current) exitGrab(false);
     };
