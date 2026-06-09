@@ -721,8 +721,55 @@ function AudioTrackRow({
 
    Audit-fix D-7 Stage 1.E — the action picker / new / import / unlink cluster in `PlaybackControls.jsx` (lifted from this file in Round 7, FID-A.2) parallels Blender's `template_action` UI helper, which wraps the same animated-id-rebind affordance in a single layout primitive. See `scripts/startup/bl_ui/space_dopesheet.py:313` (`_draw_action_selector` classmethod) which calls `row.template_action(animated_id, new="action.new", unlink="action.unlink")` to render the picker for the Dope-Sheet's active animated id. SS's split (picker in PlaybackControls, keyframe surface here) keeps the timeline panel focused on keyframe editing while the transport row owns the action selector — same separation of concerns Blender achieves by putting `template_action` in the header row.
 ────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Standalone playhead line + triangle head. Subscribes to `currentTime`
+ * internally so a tick re-renders only this 1-pixel vertical span, not
+ * the entire timeline.
+ *
+ * @param {{startFrame: number, totalFrames: number, fps: number}} props
+ */
+function TimelinePlayhead({ startFrame, totalFrames, fps }) {
+  const currentTime = useAnimationStore((s) => s.currentTime);
+  const currentFrame = msToFrame(currentTime, fps);
+  const frac = (currentFrame - startFrame) / totalFrames;
+  if (frac < 0 || frac > 1) return null;
+  return (
+    <div
+      className="absolute top-0 bottom-0 w-px bg-primary/80 pointer-events-none z-40"
+      style={{ left: `calc(${LABEL_W + TRACK_PAD}px + ${frac * 100}% - ${(LABEL_W + 2 * TRACK_PAD) * frac}px)` }}
+    >
+      <div className="absolute -top-0 left-1/2 -translate-x-1/2 w-0 h-0
+        border-l-[4px] border-l-transparent
+        border-r-[4px] border-r-transparent
+        border-t-[6px] border-t-primary" />
+    </div>
+  );
+}
+
 export function TimelineEditor() {
-  const anim = useAnimationStore();
+  // Pre-fix: `const anim = useAnimationStore()` subscribed to the WHOLE
+  // animation store with no selector. Every `currentTime` tick (60 Hz
+  // during playback) triggered a full re-render of the entire timeline
+  // — ruler, all rows, every keyframe diamond, the audio waveform — on
+  // a 240-frame record-mode action that was the dominant cost in the
+  // Viewport tab (~10 fps observed). Now we subscribe field-by-field to
+  // only the slowly-changing fields; `currentTime` lives in tiny
+  // subscriber subcomponents that own just the playhead line + frame
+  // counter, so a tick re-renders only those few elements.
+  const fps             = useAnimationStore((s) => s.fps);
+  const animEndFrame    = useAnimationStore((s) => s.endFrame);
+  const animStartFrame  = useAnimationStore((s) => s.startFrame);
+  const activeActionId  = useAnimationStore((s) => s.activeActionId);
+  const loopKeyframes   = useAnimationStore((s) => s.loopKeyframes);
+  // Action functions — zustand returns stable refs across renders so
+  // subscribing to them is identity-free; this just lets us call them
+  // ergonomically without `useAnimationStore.getState().fn(...)` at
+  // every call site. Used by callbacks below.
+  const animSeekFrame         = useAnimationStore((s) => s.seekFrame);
+  const animSetActiveActionId = useAnimationStore((s) => s.setActiveActionId);
+  const animSetFps            = useAnimationStore((s) => s.setFps);
+  const animSetEndFrame       = useAnimationStore((s) => s.setEndFrame);
   const proj = useProjectStore(s => s.project);
   const update = useProjectStore(s => s.updateProject);
   const sel = useEditorStore(s => s.selection);
@@ -752,15 +799,18 @@ export function TimelineEditor() {
   // focuses on that action — the UI store is only consulted when the
   // scene has no binding (most projects pre-Stage-1.E start state).
   const animation = useMemo(
-    () => getActiveSceneAction(proj, anim.activeActionId),
-    [proj.nodes, proj.actions, anim.activeActionId]
+    () => getActiveSceneAction(proj, activeActionId),
+    [proj.nodes, proj.actions, activeActionId]
   );
 
   /* ── Derived values ─────────────────────────────────────────────────── */
-  const fps = anim.fps;
-  const currentFrame = msToFrame(anim.currentTime, fps);
-  const endFrame = Math.max(1, anim.endFrame);
-  const startFrame = Math.max(0, anim.startFrame);
+  // NOTE: `currentFrame` derived from `anim.currentTime` is intentionally
+  // NOT computed at the parent level — that'd re-render the whole editor
+  // on every tick. The playhead line subscribes to currentTime via
+  // `<TimelinePlayhead>` below; per-cell "at-playhead" highlights were
+  // dropped (they strobed across keys 60 Hz during playback anyway).
+  const endFrame = Math.max(1, animEndFrame);
+  const startFrame = Math.max(0, animStartFrame);
   const totalFrames = Math.max(endFrame - startFrame, 1);
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
@@ -772,10 +822,10 @@ export function TimelineEditor() {
   useEffect(() => {
     if (animation) return;
     if (proj.actions.length === 0) return;
-    anim.setActiveActionId(proj.actions[0].id);
+    animSetActiveActionId(proj.actions[0].id);
     const a = proj.actions[0];
-    anim.setFps(a.fps ?? 24);
-    anim.setEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
+    animSetFps(a.fps ?? 24);
+    animSetEndFrame(Math.round(((a.duration ?? 2000) / 1000) * (a.fps ?? 24)));
   }, [proj.actions, animation]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── ANIM-1 — clear local selection state on action switch ─────────── */
@@ -787,7 +837,7 @@ export function TimelineEditor() {
     setSelectedKeyframes(new Set());
     setSelectionBox(null);
     setClipboard(null);
-  }, [anim.activeActionId, animation?.id]);
+  }, [activeActionId, animation?.id]);
 
   // Audio sync hook
   useAudioSync(animation, anim);
@@ -816,11 +866,11 @@ export function TimelineEditor() {
   const onRulerPointerDown = useCallback((e) => {
     dragCtx.current = { type: 'playhead' };
     const frame = xToFrame(e.clientX);
-    anim.seekFrame(clamp(frame, startFrame, endFrame));
+    animSeekFrame(clamp(frame, startFrame, endFrame));
 
     const handleMove = (ev) => {
       const frame = xToFrame(ev.clientX);
-      anim.seekFrame(clamp(frame, startFrame, endFrame));
+      animSeekFrame(clamp(frame, startFrame, endFrame));
     };
     const handleUp = () => {
       window.removeEventListener('pointermove', handleMove);
@@ -890,7 +940,7 @@ export function TimelineEditor() {
       if (dragFrameDelta !== 0) {
         let nextSel = new Set();
         update((p) => {
-          const a = getActiveSceneAction(p, anim.activeActionId);
+          const a = getActiveSceneAction(p, activeActionId);
           if (!a) return;
           for (const item of dragCtx.current.origKeyframes) {
             const fc = item.paramId
@@ -944,7 +994,7 @@ export function TimelineEditor() {
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
 
-  }, [selectedKeyframes, animation, anim.activeActionId, fps, xToFrame, update]);
+  }, [selectedKeyframes, animation, activeActionId, fps, xToFrame, update]);
 
   // Box Selection
   const onTrackAreaPointerDown = useCallback((e) => {
@@ -955,7 +1005,7 @@ export function TimelineEditor() {
     const rulerRect = rulerRef.current?.getBoundingClientRect();
     if (rulerRect && e.clientX >= rulerRect.left) {
       const frame = xToFrame(e.clientX);
-      anim.seekFrame(clamp(frame, startFrame, endFrame));
+      animSeekFrame(clamp(frame, startFrame, endFrame));
     }
 
     // Deselect if clicking empty space without shift
@@ -1075,7 +1125,7 @@ export function TimelineEditor() {
       const fc = animation.fcurves.find(f => fcurveTargetsParam(f, paramId));
       const kf = fc?.keyforms.find(k => k.time === timeMs);
       if (!kf) return;
-      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.interpolation ?? 'linear', sourceActionId: anim.activeActionId });
+      setClipboard({ kind: 'param', paramId, value: kf.value, easing: kf.interpolation ?? 'linear', sourceActionId: activeActionId });
       return;
     }
     const nodeId = rowKey.slice('node:'.length);
@@ -1091,7 +1141,7 @@ export function TimelineEditor() {
       }
     }
     if (Object.keys(props).length > 0) {
-      setClipboard({ kind: 'node', properties: props, easing, sourceActionId: anim.activeActionId, sourceNodeIds: [...sel] });
+      setClipboard({ kind: 'node', properties: props, easing, sourceActionId: activeActionId, sourceNodeIds: [...sel] });
     }
   }, [animation]);
 
@@ -1100,7 +1150,7 @@ export function TimelineEditor() {
     // ANIM-5 — refuse cross-action paste with a toast. Pre-fix the
     // clipboard captured only the payload; pasting after switching
     // active actions silently keyed into the wrong action.
-    if (clipboard.sourceActionId && clipboard.sourceActionId !== anim.activeActionId) {
+    if (clipboard.sourceActionId && clipboard.sourceActionId !== activeActionId) {
       toast({
         variant: 'destructive',
         title: 'Cross-action paste blocked',
@@ -1110,9 +1160,9 @@ export function TimelineEditor() {
     }
 
     update((p) => {
-      const a = getActiveSceneAction(p, anim.activeActionId);
+      const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
-      const timeMs = anim.currentTime;
+      const timeMs = useAnimationStore.getState().currentTime;
 
       if (clipboard.kind === 'param') {
         let fc = a.fcurves.find(f => fcurveTargetsParam(f, clipboard.paramId));
@@ -1162,14 +1212,16 @@ export function TimelineEditor() {
         }
       }
     });
-  }, [clipboard, animation, sel, anim.currentTime, anim.activeActionId, update]);
+    // currentTime is read via getState() inside the callback body —
+    // not a dep so a playhead tick doesn't bust this memo.
+  }, [clipboard, animation, sel, activeActionId, update]);
 
   /* ── Delete Selection ────────────────────────────────────────────────── */
   const deleteSelectedKeyframes = useCallback(() => {
     if (selectedKeyframes.size === 0) return;
 
     update((p) => {
-      const a = getActiveSceneAction(p, anim.activeActionId);
+      const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
       for (const fc of a.fcurves) {
         const target = decodeFCurveTarget(fc);
@@ -1188,7 +1240,7 @@ export function TimelineEditor() {
       a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
     });
     setSelectedKeyframes(new Set());
-  }, [update, anim.activeActionId, selectedKeyframes]);
+  }, [update, activeActionId, selectedKeyframes]);
 
   // Keybindings
   useEffect(() => {
@@ -1234,7 +1286,7 @@ export function TimelineEditor() {
     const targetId = `${rowKey}:${timeMs}`;
     const applyTo = selectedKeyframes.has(targetId) ? selectedKeyframes : new Set([targetId]);
     update((p) => {
-      const a = getActiveSceneAction(p, anim.activeActionId);
+      const a = getActiveSceneAction(p, activeActionId);
       if (!a) return;
       for (const fc of a.fcurves) {
         const target = decodeFCurveTarget(fc);
@@ -1252,7 +1304,7 @@ export function TimelineEditor() {
         }
       }
     });
-  }, [selectedKeyframes, anim.activeActionId, update]);
+  }, [selectedKeyframes, activeActionId, update]);
 
   const removeKeyframeAt = useCallback((rowKey, timeMs) => {
     const targetId = `${rowKey}:${timeMs}`;
@@ -1260,7 +1312,7 @@ export function TimelineEditor() {
       deleteSelectedKeyframes();
     } else {
       update((p) => {
-        const a = getActiveSceneAction(p, anim.activeActionId);
+        const a = getActiveSceneAction(p, activeActionId);
         if (!a) return;
         const wantParam = rowKey.startsWith('param:');
         const lookupId = wantParam ? rowKey.slice('param:'.length) : rowKey.slice('node:'.length);
@@ -1279,7 +1331,7 @@ export function TimelineEditor() {
         a.fcurves = a.fcurves.filter(f => f.keyforms.length > 0);
       });
     }
-  }, [selectedKeyframes, deleteSelectedKeyframes, anim.activeActionId, update]);
+  }, [selectedKeyframes, deleteSelectedKeyframes, activeActionId, update]);
 
   /* ── Build track rows ────────────────────────────────────────────────── */
   // Rows include both NODE-targeted fcurves (objects["<nodeId>"].<prop>:
@@ -1491,7 +1543,7 @@ export function TimelineEditor() {
                       })}
                       
                       {/* Loop segment curve */}
-                      {anim.loopKeyframes && row.times.length > 0 && (() => {
+                      {loopKeyframes && row.times.length > 0 && (() => {
                         const tLast = row.times[row.times.length - 1];
                         const tEnd = frameToMs(endFrame, fps);
                         if (tLast >= tEnd) return null;
@@ -1522,7 +1574,12 @@ export function TimelineEditor() {
                       const frac = (frame - startFrame) / totalFrames;
                       if (frac < 0 || frac > 1) return null;
 
-                      const isAtPlayhead = frame === currentFrame;
+                      // `isAtPlayhead` (the per-keyform "playhead is over
+                      // this key" highlight) was dropped — required a
+                      // currentTime subscription at parent level which
+                      // re-rendered every diamond at 60 Hz. During
+                      // continuous playback it strobed across keys
+                      // anyway, not a useful cue.
                       const isSelected = selectedKeyframes.has(`${row.rowKey}:${timeMs}`);
 
                       return (
@@ -1535,9 +1592,7 @@ export function TimelineEditor() {
                                 'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 cursor-ew-resize',
                                 'rotate-45 border transition-colors z-20 keyframe-diamond',
                                 isSelected ? 'bg-primary border-primary shadow-[0_0_4px_rgba(255,255,255,0.5)]'
-                                  : isAtPlayhead
-                                    ? 'bg-primary border-primary'
-                                    : 'bg-background border-primary/60 hover:bg-primary/40',
+                                  : 'bg-background border-primary/60 hover:bg-primary/40',
                               ].join(' ')}
                               style={{ left: frameToPercentage(frame) }}
                             />
@@ -1583,7 +1638,7 @@ export function TimelineEditor() {
                     })}
 
                     {/* Phantom Loop Keyframe */}
-                    {anim.loopKeyframes && row.times.length > 0 && !row.times.includes(frameToMs(endFrame, fps)) && (
+                    {loopKeyframes && row.times.length > 0 && !row.times.includes(frameToMs(endFrame, fps)) && (
                       <div
                         title={`Loop wrap-around: references first keyframe at frame ${msToFrame(row.times[0], fps)}`}
                         className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rotate-45 border border-primary/40 border-dashed bg-transparent z-10 pointer-events-none"
@@ -1611,23 +1666,17 @@ export function TimelineEditor() {
               />
             ))}
 
-            {/* Playhead — vertical line spanning ruler + all rows */}
-            {(trackRows.length > 0 || (animation?.audioTracks?.length ?? 0) > 0) && (() => {
-              const frac = (currentFrame - startFrame) / totalFrames;
-              if (frac < 0 || frac > 1) return null;
-              return (
-                <div
-                  className="absolute top-0 bottom-0 w-px bg-primary/80 pointer-events-none z-40"
-                  style={{ left: `calc(${LABEL_W + TRACK_PAD}px + ${frac * 100}% - ${(LABEL_W + 2 * TRACK_PAD) * frac}px)` }}
-                >
-                  {/* Playhead triangle head */}
-                  <div className="absolute -top-0 left-1/2 -translate-x-1/2 w-0 h-0
-                    border-l-[4px] border-l-transparent
-                    border-r-[4px] border-r-transparent
-                    border-t-[6px] border-t-primary" />
-                </div>
-              );
-            })()}
+            {/* Playhead — vertical line spanning ruler + all rows.
+                Extracted into a tiny subscriber subcomponent so a
+                `currentTime` tick re-renders ONLY this line + triangle,
+                not the entire timeline. */}
+            {(trackRows.length > 0 || (animation?.audioTracks?.length ?? 0) > 0) && (
+              <TimelinePlayhead
+                startFrame={startFrame}
+                totalFrames={totalFrames}
+                fps={fps}
+              />
+            )}
 
           </div>
         )}

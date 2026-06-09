@@ -759,8 +759,18 @@ export default function CanvasViewport({
       // chainEval sees the animated dial position. We also push the
       // merged values into paramValuesStore so the ParametersEditor
       // sliders track playback.
-      if (getEditorMode() === 'animation') {
-        const _anim = animRef.current;
+      // Animation playback overlay. Pre-fix this was gated to
+      // `editorMode === 'animation'` only — so pressing Space on the
+      // Layout tab toggled `animationStore.isPlaying` (the operator
+      // fired correctly), the playhead advanced, but the canvas
+      // showed no animation because computeParamOverrides was never
+      // called. Now we additionally run the overlay whenever playback
+      // is active, regardless of workspace. Scrubbing in the animation
+      // editor still applies overrides (the original mode gate); the
+      // new disjunct lets Space play actually animate the model on
+      // Layout / Live Preview / any other tab.
+      const _anim = animRef.current;
+      if (getEditorMode() === 'animation' || _anim.isPlaying) {
         const _proj = projectRef.current;
         // Stage 1.E: scene-bound action wins over UI-store fallback.
         const _activeAction = getActiveSceneAction(_proj, _anim.activeActionId);
