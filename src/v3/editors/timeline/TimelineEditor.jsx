@@ -1637,15 +1637,20 @@ export function TimelineEditor() {
 
                     {row.times.map(timeMs => {
                       const frame = msToFrame(timeMs, fps);
-                      const frac = (frame - startFrame) / totalFrames;
-                      if (frac < 0 || frac > 1) return null;
-
-                      // `isAtPlayhead` (the per-keyform "playhead is over
-                      // this key" highlight) was dropped — required a
-                      // currentTime subscription at parent level which
-                      // re-rendered every diamond at 60 Hz. During
-                      // continuous playback it strobed across keys
-                      // anyway, not a useful cue.
+                      // No `if (frac < 0 || frac > 1) return null` clip.
+                      // Pre-fix, dragging keyframes past frame 0 or past
+                      // endFrame made the diamonds disappear visually
+                      // even though their data still existed — so they
+                      // played back wrong (key was there in the data,
+                      // contributing to the curve, but the user couldn't
+                      // see or grab them to drag back). Blender renders
+                      // out-of-range keys at negative/over-100% positions
+                      // and the user pans the timeline to see them; SS
+                      // now does the same — the track area has horizontal
+                      // overflow, so off-range diamonds sit just past the
+                      // visible edge. Still keyed via the box-select +
+                      // KeyA operators (those walk row.times directly,
+                      // not the rendered DOM).
                       const isSelected = selectedKeyframes.has(`${row.rowKey}:${timeMs}`);
 
                       return (
