@@ -1482,7 +1482,11 @@ export function TimelineEditor() {
         if (sel && sel.type === 'Range' && !sel.isCollapsed) return;
       } catch { /* defensive */ }
 
-      if (e.key === 'Backspace' || e.key === 'Delete') {
+      if (e.key === 'Backspace' || e.key === 'Delete'
+          || (e.code === 'KeyX' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey)) {
+        // X mirrors Backspace/Delete for Blender muscle memory
+        // (`graph.delete`/`action.delete` is bound to X in the default
+        // Blender keymap at `blender_default.py:2050`/`:2702`).
         deleteSelectedKeyframes();
       } else if (e.ctrlKey || e.metaKey) {
         if (e.key === 'c') {
