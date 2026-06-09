@@ -49,6 +49,8 @@
 import { gatherPhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
+import { matchTag } from '../../psdOrganizer.js';
+import { resolveVariantFadeRules } from './variantFadeRules.js';
 import {
   isWarpLatticeNode,
   isRotationDeformerNode,
@@ -544,12 +546,56 @@ function _computeRotationCanvasPivotAtRest(rotation, warpRest, rotationRest) {
  *   - Innermost body warp also unset → root-parent (canvas-px verts
  *     pass through).
  */
+/**
+ * Resolve which variant suffixes a part is a base for. Returns empty
+ * when the part is itself a variant, has no paired variants, or carries
+ * a backdrop tag (face / ears / hair — those layer underneath their
+ * variants instead of fading out).
+ *
+ * @param {{id: string, name?: string, variantSuffix?: string|null, variantOf?: string|null}} part
+ * @param {Map<string, string[]>} variantSuffixesByBaseId
+ * @param {Set<string>} backdropTagsSet
+ * @returns {string[]}
+ */
+function _resolvePairedVariantSuffixes(part, variantSuffixesByBaseId, backdropTagsSet) {
+  if (typeof part.variantSuffix === 'string' && part.variantSuffix.length > 0) {
+    // The part is itself a variant; the variant mesh's own keyforms
+    // already encode the 0→1 fade-in.
+    return [];
+  }
+  const tag = matchTag(part.name ?? part.id ?? '');
+  if (tag && backdropTagsSet.has(tag)) return [];
+  const list = variantSuffixesByBaseId.get(part.id);
+  return Array.isArray(list) && list.length > 0 ? list.slice() : [];
+}
+
 function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, innermostBodyWarpId }) {
   const parts = (project.nodes ?? []).filter((n) => {
     const m = getMesh(n, project);
     return !!m && Array.isArray(m.vertices) && m.vertices.length > 0;
   });
   if (parts.length === 0) return EMPTY_ARTMESHES;
+  // Paired-variant base-fade map. For each non-backdrop base part, list
+  // every suffix of every variant that pairs with it. The runtime depgraph
+  // multiplies the base's blended opacity by `(1 - paramValue)` per paired
+  // suffix WHEN the keyforms don't already encode the fade. Keeps the
+  // user-rule "only one set of eye layers shown at a time" intact even
+  // when Init Rig was last run before the variants were added — the user
+  // doesn't have to manually re-rig after every variant edit.
+  // Backdrop tags (face, ears, hair) are EXCLUDED — face stays at
+  // opacity=1 with face.smile layering on top, per Hiyori convention.
+  /** @type {Map<string, string[]>} */
+  const variantSuffixesByBaseId = new Map();
+  const variantFadeRules = resolveVariantFadeRules(project);
+  const backdropTagsSet = new Set(variantFadeRules.backdropTags ?? []);
+  for (const node of project.nodes ?? []) {
+    if (!node || node.type !== 'part') continue;
+    if (typeof node.variantOf !== 'string') continue;
+    if (typeof node.variantSuffix !== 'string' || node.variantSuffix.length === 0) continue;
+    const list = variantSuffixesByBaseId.get(node.variantOf) ?? [];
+    if (!list.includes(node.variantSuffix)) list.push(node.variantSuffix);
+    variantSuffixesByBaseId.set(node.variantOf, list);
+  }
   const out = [];
   for (const part of parts) {
     const partMesh = getMesh(part, project);
@@ -735,6 +781,9 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
         triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
         uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
         variantSuffix: part.variantSuffix ?? null,
+        pairedVariantSuffixes: _resolvePairedVariantSuffixes(
+          part, variantSuffixesByBaseId, backdropTagsSet,
+        ),
         textureId: part.id ?? null,
         bindings,
         keyforms,
@@ -817,6 +866,9 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
       triangles: coerceUint16Array(tris, `selectRigSpec.artMesh[${part.id}].triangles`),
       uvs: coerceFloat32Array(uvs, `selectRigSpec.artMesh[${part.id}].uvs`),
       variantSuffix: part.variantSuffix ?? null,
+      pairedVariantSuffixes: _resolvePairedVariantSuffixes(
+        part, variantSuffixesByBaseId, backdropTagsSet,
+      ),
       textureId: part.id ?? null,
       bindings: [],
       keyforms: [{

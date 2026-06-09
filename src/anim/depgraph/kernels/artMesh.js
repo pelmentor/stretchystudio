@@ -131,6 +131,45 @@ export function kernelArtMeshEval(op, ctx) {
   const meshState = blendKeyforms(keyforms, cell, part.draw_order ?? 500);
   if (!meshState) return null;
 
+  // Paired-variant base-fade override (RULE-№1 belt-and-suspenders).
+  // `pairedVariantSuffixes` is non-empty only for non-backdrop bases that
+  // have variant siblings — see `_resolvePairedVariantSuffixes` in
+  // selectRigSpec.js. When the runtime keyforms don't already encode the
+  // base-fade-out on Param<Suffix> (i.e. the bindings list doesn't include
+  // that param), multiply blended opacity by `(1 - paramValue)` per
+  // paired suffix. This guarantees the user-rule "only one set of eye
+  // layers shown at a time" holds even when Init Rig was last run BEFORE
+  // the variants were added — the base wouldn't fade out at all without
+  // this override, because the stale keyforms still hold opacity=1.
+  //
+  // Backdrop tags (face, ears, hair) are excluded at the source
+  // (`_resolvePairedVariantSuffixes` returns []) so face stays at
+  // opacity=1 with face.smile layering on top, per the user rule.
+  //
+  // Already-correct keyforms (post-fresh Init Rig with the compound 2D
+  // grid for eye base, or the 1D hasBaseFadeOnly fade for mouth/eyebrow
+  // base) get a no-op here: the bindings include Param<Suffix> and the
+  // skip-check short-circuits before multiplying.
+  if (rigMesh && Array.isArray(rigMesh.pairedVariantSuffixes)
+      && rigMesh.pairedVariantSuffixes.length > 0) {
+    /** @type {Set<string>} */
+    const bindingParamIds = new Set();
+    for (const b of bindings) if (b?.parameterId) bindingParamIds.add(b.parameterId);
+    let multiplier = 1;
+    for (const sfx of rigMesh.pairedVariantSuffixes) {
+      const paramId = `Param${sfx.charAt(0).toUpperCase()}${sfx.slice(1)}`;
+      if (bindingParamIds.has(paramId)) continue;   // keyforms already encode the fade
+      const v = paramValues[paramId];
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      // Clamp to [0,1] — the param's authored range is 0..1 but a stray
+      // driver could push it past, and a negative multiplier flips alpha.
+      const clamped = v < 0 ? 0 : v > 1 ? 1 : v;
+      multiplier *= (1 - clamped);
+      if (multiplier <= 0) { multiplier = 0; break; }
+    }
+    if (multiplier < 1) meshState.opacity *= multiplier;
+  }
+
   // 3 — walk the deformer chain.
   const len = meshState.vertexPositions.length;
   let bufA = meshState.vertexPositions;
