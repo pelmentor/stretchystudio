@@ -1033,47 +1033,57 @@ export default function CanvasViewport({
               if (_action) {
                 const _fps = _action.fps ?? _anim.fps ?? 24;
                 const _frame = msToFrame(_anim.currentTime, _fps);
+                const _snappedMs = frameToMs(_frame, _fps);
                 const _session = recordSessionRef.current;
-                if (!_session
-                    || _session.lastFrame !== _frame
-                    || _session.actionId !== _action.id) {
-                  const _snappedMs = frameToMs(_frame, _fps);
-                  const _firstWriteOfSession = !_session?.snapshotTaken
-                    || _session.actionId !== _action.id;
-                  // First write of a session keeps history so Ctrl+Z
-                  // restores the pre-record state; subsequent writes
-                  // skipHistory so a 600-frame record doesn't make
-                  // 600 undo entries.
-                  useProjectStore.getState().updateProject((p) => {
-                    const a = (p.actions ?? []).find((x) => x.id === _action.id);
-                    if (!a) return;
-                    // Iterate the FULL `updates` set (every live-preview
-                    // driver's value this frame), NOT `realUpdates` (the
-                    // epsilon-filtered changed-only subset). `realUpdates`
-                    // is the right gate for `setMany` — no store write
-                    // when value is unchanged — but it's WRONG for record
-                    // keying: if ParamAngleX is held at 5 while ParamBreath
-                    // moves on a sine, only ParamBreath would get a key
-                    // this frame and ParamAngleX would keep its last key
-                    // at some earlier frame. On playback, interpolation
-                    // between sparse per-param keys distorts the recorded
-                    // trajectory (phantom motion for params that were
-                    // actually constant). Recording is "snapshot every
-                    // driver at this frame", not "snapshot drivers that
-                    // changed". `insertKeyformAtInAction` with NOFLAGS
-                    // replaces the existing key at this time, so the
-                    // store stays compact (one key per frame per driver).
-                    for (const paramId of Object.keys(updates)) {
-                      const rnaPath = `objects["__params__"].values["${paramId}"]`;
-                      insertKeyformAtInAction(a, rnaPath, _snappedMs, updates[paramId], INSERTKEY_FLAGS.NOFLAGS);
-                    }
-                  }, { skipHistory: !_firstWriteOfSession });
-                  recordSessionRef.current = {
-                    lastFrame: _frame,
-                    snapshotTaken: true,
-                    actionId: _action.id,
-                  };
-                }
+                // No per-frame dedup gate. Pre-fix the block only fired
+                // when `_session.lastFrame !== _frame` — fine during
+                // ACTIVE PLAYBACK (the playhead advances → new frame
+                // each tick), but a record-mode user "performing" the
+                // character (Live Preview + cursor drive, no Space-play)
+                // sat on a single frame the whole time. Result: only
+                // frame 0 ever got keyed; every later driver change was
+                // silently dropped.
+                // Now we write on EVERY tick the outer `realCount > 0`
+                // gate (line ~985) confirms driver values actually
+                // changed. `insertKeyformAtInAction` with NOFLAGS
+                // REPLACES the existing key at `_snappedMs`, so staying
+                // on one frame refines that frame's key (no spam);
+                // playback still naturally produces one key per
+                // advancing frame.
+                const _firstWriteOfSession = !_session?.snapshotTaken
+                  || _session.actionId !== _action.id;
+                // First write of a session keeps history so Ctrl+Z
+                // restores the pre-record state; subsequent writes
+                // skipHistory so a 600-frame record doesn't make
+                // 600 undo entries.
+                useProjectStore.getState().updateProject((p) => {
+                  const a = (p.actions ?? []).find((x) => x.id === _action.id);
+                  if (!a) return;
+                  // Iterate the FULL `updates` set (every live-preview
+                  // driver's value this frame), NOT `realUpdates` (the
+                  // epsilon-filtered changed-only subset). `realUpdates`
+                  // is the right gate for `setMany` — no store write
+                  // when value is unchanged — but it's WRONG for record
+                  // keying: if ParamAngleX is held at 5 while ParamBreath
+                  // moves on a sine, only ParamBreath would get a key
+                  // this frame and ParamAngleX would keep its last key
+                  // at some earlier frame. On playback, interpolation
+                  // between sparse per-param keys distorts the recorded
+                  // trajectory (phantom motion for params that were
+                  // actually constant). Recording is "snapshot every
+                  // driver at this frame", not "snapshot drivers that
+                  // changed". `insertKeyformAtInAction` with NOFLAGS
+                  // replaces the existing key at this time, so the
+                  // store stays compact (one key per frame per driver).
+                  for (const paramId of Object.keys(updates)) {
+                    const rnaPath = `objects["__params__"].values["${paramId}"]`;
+                    insertKeyformAtInAction(a, rnaPath, _snappedMs, updates[paramId], INSERTKEY_FLAGS.NOFLAGS);
+                  }
+                }, { skipHistory: !_firstWriteOfSession });
+                recordSessionRef.current = {
+                  snapshotTaken: true,
+                  actionId: _action.id,
+                };
               }
             } else if (recordSessionRef.current) {
               // Any gate (dot OFF / mode changed away from record / no
