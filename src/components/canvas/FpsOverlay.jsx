@@ -23,7 +23,7 @@ export function FpsOverlay() {
   }, []);
 
   return (
-    <div className="absolute bottom-1 right-2 text-[10px] font-mono text-white/60 pointer-events-none select-none tabular-nums z-50">
+    <div className="absolute top-1 left-2 text-[10px] font-mono text-red-500 pointer-events-none select-none tabular-nums z-50">
       {fps} fps
     </div>
   );
