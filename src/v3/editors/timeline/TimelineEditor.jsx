@@ -826,6 +826,52 @@ export function TimelineEditor() {
   const totalFrames = Math.max(endFrame - startFrame, 1);
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
+  /* ── KeyA = select-all keyforms inside this editor ──────────────────── */
+  // Pre-fix Timeline had no KeyA binding, so the user's Blender muscle-
+  // memory press went straight through to the global operator
+  // dispatcher (`src/v3/operators/dispatcher.js`) → which fired
+  // `selection.selectAllToggle` (PROJECT NODE scope), wrong target.
+  // Symptom: "A doesn't select my keys, then I try Box-select, miss
+  // off-screen rows, drag the partial selection, and the unmoved keys
+  // pop up during playback and break the animation." Fix: hover-gated
+  // KeyA that walks every trackRow's every keyform and pushes a single
+  // `${rowKey}:${time}` entry into `selectedKeyframes`. Capture-phase
+  // listener with stopPropagation/stopImmediatePropagation prevents
+  // the project-scope `selectAllToggle` from also firing.
+  const hoverRef = useRef(false);
+  // Keep a ref to the latest rows so the window keydown handler (whose
+  // closure captures values at mount) reads the current row list.
+  const trackRowsRefForA = useRef([]);
+  useEffect(() => {
+    const onKeyA = (e) => {
+      if (!hoverRef.current) return;
+      if (e.code !== 'KeyA') return;
+      // Skip modifier combos — Ctrl/Cmd+A is "add to existing" in IC
+      // preset etc.; bare A is the toggle. Leave the modifier variants
+      // for future presets (Slice 5.AA-style resolver).
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const rows = trackRowsRefForA.current;
+      if (!rows || rows.length === 0) return;
+      // Toggle semantics: if anything selected → clear; else select-all.
+      setSelectedKeyframes((prev) => {
+        if (prev.size > 0) return new Set();
+        const next = new Set();
+        for (const row of rows) {
+          if (!row?.rowKey || !Array.isArray(row.times)) continue;
+          for (const t of row.times) next.add(`${row.rowKey}:${t}`);
+        }
+        return next;
+      });
+    };
+    window.addEventListener('keydown', onKeyA, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyA, { capture: true });
+  }, []);
+
   /* ── Auto-select action when one exists ──────────────────────────────── */
   // Stage 1.E: only auto-select when neither scene-binding nor UI-store
   // resolves an action. If the scene is already bound, that wins — no
@@ -1404,6 +1450,10 @@ export function TimelineEditor() {
     return [...paramRows, ...nodeRows];
   }, [animation, proj.nodes, proj.parameters]);
 
+  // Keep the KeyA window-handler's row snapshot fresh without making
+  // it a dep (the handler is mount-once, never re-attaches).
+  trackRowsRefForA.current = trackRows;
+
   /* ── Ruler tick marks ────────────────────────────────────────────────── */
   const rulerTicks = useMemo(() => {
     const ticks = [];
@@ -1417,7 +1467,11 @@ export function TimelineEditor() {
   const hasAnimation = proj.actions.length > 0;
 
   return (
-    <div className="flex flex-col h-full select-none text-xs">
+    <div
+      className="flex flex-col h-full select-none text-xs"
+      onPointerEnter={() => { hoverRef.current = true; }}
+      onPointerLeave={() => { hoverRef.current = false; }}
+    >
 
       {/* Transport bar lifted to Footer's <PlaybackControls /> in
           Round 7 (FID-A.2, 2026-05-16). All transport controls

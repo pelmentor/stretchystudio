@@ -186,6 +186,53 @@ export function DopesheetEditor() {
   // reads `handles` via the same subscription — no subscriber churn.
   const [keyformSelectionHandles, setKeyformSelectionHandles] = useKeyformSelectionState();
 
+  // KeyA = select-all keyforms. Hover-gated so it only fires when the
+  // pointer is over THIS editor; capture-phase + stopImmediatePropagation
+  // so the global operator dispatcher's project-scope
+  // `selection.selectAllToggle` doesn't also fire. Pre-fix the user
+  // pressed A expecting Blender-style "select all in this editor",
+  // got NO keyform selection (the dispatcher selected project nodes
+  // instead), then fell back to B-box-select and missed off-screen
+  // rows — leaving keys behind that popped up on playback.
+  const hoverRef = useRef(false);
+  const rowsRefForA = useRef([]);
+  useEffect(() => {
+    const onKeyA = (e) => {
+      if (!hoverRef.current) return;
+      if (e.code !== 'KeyA') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const liveRows = rowsRefForA.current;
+      if (!liveRows || liveRows.length === 0) return;
+      setKeyformSelectionHandles((prev) => {
+        // Toggle: any selected → clear; else select-all-visible.
+        let anySelected = false;
+        for (const inner of prev.values()) {
+          if (inner && inner.size > 0) { anySelected = true; break; }
+        }
+        if (anySelected) return new Map();
+        const next = new Map();
+        for (const row of liveRows) {
+          if (!row?.fcurveId || !Array.isArray(row.keyforms)) continue;
+          const inner = new Map();
+          for (let i = 0; i < row.keyforms.length; i++) {
+            inner.set(i, { center: true, left: true, right: true });
+          }
+          if (inner.size > 0) next.set(row.fcurveId, inner);
+        }
+        return next;
+      });
+    };
+    window.addEventListener('keydown', onKeyA, { capture: true });
+    return () => window.removeEventListener('keydown', onKeyA, { capture: true });
+  }, [setKeyformSelectionHandles]);
+  // Keep the handler's row snapshot fresh.
+  rowsRefForA.current = rows;
+
   // ANIM-2 — prune stale fcurveId entries on action switch. Pre-fix
   // FCurveEditor had this prune at line 788 but DopesheetEditor (often
   // the only visible animation editor) did not, so handles persisted
@@ -1130,7 +1177,11 @@ export function DopesheetEditor() {
   }
 
   return (
-    <div className="flex flex-col h-full bg-card overflow-hidden">
+    <div
+      className="flex flex-col h-full bg-card overflow-hidden"
+      onPointerEnter={() => { hoverRef.current = true; }}
+      onPointerLeave={() => { hoverRef.current = false; }}
+    >
       <div className="flex-1 overflow-auto">
         <div className="flex flex-col">
           <Ruler
