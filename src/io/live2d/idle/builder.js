@@ -10,6 +10,7 @@
 
 import {
   genConstant, genSine, genWander, genBlink, genBurst, genSyllables,
+  genPoseHold,
   clampKeyframes, applyPersonality,
 } from './motionLib.js';
 import {
@@ -164,6 +165,17 @@ function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
         seed: seed * 41 + hashCode(paramId),
       });
       break;
+    case 'poseHold':
+      kfs = genPoseHold({
+        durationMs,
+        target: cfg.target,
+        mid: cfg.mid ?? 0,
+        attackFrac: cfg.attackFrac,
+        holdFrac: cfg.holdFrac,
+        returnFrac: cfg.returnFrac,
+        samples: cfg.samples,
+      });
+      break;
     default:
       return null;
   }
@@ -290,6 +302,11 @@ export function buildMotion3({
   }
 
   const presetTable = presetEntry.params;
+  // `cycleType: 'hold'` presets (look-*, embarrassed) emit a non-looping
+  // motion3 — the curve ends at a residual pose, not at its t=0 value, and
+  // Cubism / runtime should NOT auto-restart. Loop-presets (idle, listening,
+  // talking-idle) keep the existing loop=true contract.
+  const isLoopPreset = (presetEntry.cycleType ?? 'loop') === 'loop';
   // Fall back to all preset-table keys when caller's paramIds is empty.
   const candidatePool = paramIds.length > 0 ? paramIds : Object.keys(presetTable);
 
@@ -337,7 +354,7 @@ export function buildMotion3({
     Meta: {
       Duration: durationSec,
       Fps: fps,
-      Loop: true,
+      Loop: isLoopPreset,
       AreBeziersRestricted: false,
       CurveCount: curves.length,
       TotalSegmentCount: totalSegmentCount,
@@ -395,11 +412,16 @@ export function resultToSsAction(result, opts = {}) {
     fps = result.motion3.Meta.Fps ?? 30,
   } = opts;
 
+  // Loop presets get the head-of-stack Cycles modifier so the motion3
+  // exporter writes `Meta.Loop: true`. Hold presets (look-*, embarrassed)
+  // are intentionally one-shot — emit a bare fcurve so the action plays
+  // through once and stops at its residual pose.
+  const isLoopPreset = (presetEntry?.cycleType ?? 'loop') === 'loop';
   const fcurves = [];
   for (const [paramId, kfs] of result.paramKeyframes) {
     const fc = buildParamFCurve(paramId, kfs);
     if (fc) {
-      fc.modifiers = [makeLoopingCyclesModifier()];
+      if (isLoopPreset) fc.modifiers = [makeLoopingCyclesModifier()];
       fcurves.push(fc);
     }
   }

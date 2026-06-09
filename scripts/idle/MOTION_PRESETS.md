@@ -10,6 +10,14 @@ Generate loop-safe Live2D `.motion3.json` files for characters exported from Str
 | `listening` | loop | Attentive engagement — periodic acknowledgement nods, focused eyes, slight body lean |
 | `talking-idle` | loop | Speech-rhythm mouth + emphasis tilts and brow raises (no lipsync data needed) |
 | `embarrassed` | hold | Sustained shy expression — head tucked down, eyes glance away, blush, faster nervous breath |
+| `look-left` / `look-right` | hold | Glance ±25° yaw with body follow, eyes track, single blink at start |
+| `look-up` / `look-down` | hold | Pitch glance + eyes track vertically |
+| `look-up-left` / `look-up-right` | hold | Diagonal up + side glance |
+| `look-down-left` / `look-down-right` | hold | Diagonal down + side glance |
+| `tilt-left` / `tilt-right` | hold | Pure head roll (Z) with no yaw, no eye shift |
+| `look-set` (alias) | — | Expands to all 10 look-*/tilt-* presets in one CLI invocation |
+
+The look-* family models its temporal shape on `Kora_Shorts/motion/look_right.motion3.json`: 3.5 s duration, smoothstep ease-out to peak (~t≈1.9 s), brief hold, ease back ~92 % through rest so the character settles into a slight residual pose instead of snapping to neutral. Body angles follow head at 0.22× scale. Breath continues through the motion as an independent sine. Eye-open holds at 1.0 throughout (no blink during the glance — by spec; flip `LOOK_BLINK_*` cfg in `paramDefaults.js` if you want one).
 
 ## Two ways to invoke
 
@@ -46,13 +54,21 @@ Options:
 Examples:
 
 ```bash
-# All four motions on Shelby with energetic feel
+# All four base motions on Shelby with energetic feel
 node scripts/idle/generate_idle_motion.mjs models/shelby/Shelby.model3.json \
   --preset idle,listening,talking-idle,embarrassed --personality energetic --register
 
 # Just talking idle for a longer loop
 node scripts/idle/generate_idle_motion.mjs models/shelby/Shelby.model3.json \
   --preset talking-idle --duration 12
+
+# Full look-set in one shot — 10 glance + tilt motions, all 3.5 s
+node scripts/idle/generate_idle_motion.mjs models/shelby/Shelby.model3.json \
+  --preset look-set --register
+
+# Just left/right glances
+node scripts/idle/generate_idle_motion.mjs models/shelby/Shelby.model3.json \
+  --preset look-left,look-right --register
 
 # Different seed for variety
 node scripts/idle/generate_idle_motion.mjs models/shelby/Shelby.model3.json --seed 42

@@ -45,6 +45,64 @@ export function genConstant({ durationMs, value }) {
 }
 
 /**
+ * Pose-hold curve — head/body/eye glances to a target then partially returns.
+ * Models the shape of `look_left` / `look_right` / `look_up` / etc. motions
+ * in Kora_Shorts.motion3.json: a smoothstep attack to peak, a hold at peak,
+ * and a smoothstep release back through the rest value (with optional
+ * `returnFrac` for partial return — when < 1 the character keeps a residual
+ * pose at end-of-motion, mimicking the Kora reference).
+ *
+ * value(t) = mid + target × (attack(t) − release(t) × returnFrac)
+ *
+ *   attack(t)  = smoothstep(t, 0, attackEnd)
+ *   release(t) = smoothstep(t, releaseStart, D)
+ *
+ * With `attackFrac=0.55, holdFrac=0.25, returnFrac=0.92`:
+ *   - 0..0.55D : eases out to `mid + target`
+ *   - 0.55..0.80D : holds at `mid + target`
+ *   - 0.80..D : eases back through `mid + 0.08·target` (residual)
+ *
+ * NOT loop-safe — the curve ends near `mid + target·(1-returnFrac)`, not at
+ * the start value. Use only with `cycleType: 'hold'` presets where the
+ * motion3 `Meta.Loop` flag is `false`.
+ */
+export function genPoseHold({
+  durationMs,
+  target,
+  mid = 0,
+  attackFrac = 0.55,
+  holdFrac = 0.25,
+  returnFrac = 0.92,
+  samples = 48,
+}) {
+  const D = durationMs;
+  const attackEnd = D * attackFrac;
+  const releaseStart = D * (attackFrac + holdFrac);
+  const smoothstep = (t, t0, t1) => {
+    if (t <= t0) return 0;
+    if (t >= t1) return 1;
+    const u = (t - t0) / (t1 - t0);
+    return u * u * (3 - 2 * u);
+  };
+  const N = Math.max(8, samples);
+  const dt = D / N;
+  const kfs = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i * dt;
+    const attack = smoothstep(t, 0, attackEnd);
+    const release = smoothstep(t, releaseStart, D);
+    const weight = attack - release * returnFrac;
+    const v = mid + target * weight;
+    kfs.push({ time: t, value: v, interpolation: 'linear' });
+  }
+  // Pin endpoints to FP-exact values — mirrors the genSine FP-pin rationale.
+  kfs[0].time = 0;
+  kfs[0].value = mid;
+  kfs[kfs.length - 1].time = D;
+  return kfs;
+}
+
+/**
  * Sine curve — `value = mid + amplitude * sin(2π t / period + phase)`.
  * Period must divide durationMs evenly for loop safety; we enforce by snapping
  * to the closest integer cycle count.

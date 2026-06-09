@@ -25,7 +25,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILDER_PATH = resolve(HERE, '..', '..', 'src', 'io', 'live2d', 'idle', 'builder.js');
+const PARAMDEFAULTS_PATH = resolve(HERE, '..', '..', 'src', 'io', 'live2d', 'idle', 'paramDefaults.js');
 const { buildMotion3, PERSONALITY_PRESETS, PRESET_NAMES, PRESETS } = await import(pathToFileURL(BUILDER_PATH).href);
+const { LOOK_SET } = await import(pathToFileURL(PARAMDEFAULTS_PATH).href);
 
 // CLI uses kebab-case for nicer typing; map to internal camelCase preset ids.
 const KEBAB_TO_PRESET = {
@@ -35,19 +37,49 @@ const KEBAB_TO_PRESET = {
   'talking': 'talkingIdle',
   'embarrassed': 'embarrassedHold',
   'embarrassed-hold': 'embarrassedHold',
+  // Look-* family — see paramDefaults.js LOOK_SET.
+  'look-left': 'lookLeft',
+  'look-right': 'lookRight',
+  'look-up': 'lookUp',
+  'look-down': 'lookDown',
+  'look-up-left': 'lookUpLeft',
+  'look-up-right': 'lookUpRight',
+  'look-down-left': 'lookDownLeft',
+  'look-down-right': 'lookDownRight',
+  'tilt-left': 'tiltLeft',
+  'tilt-right': 'tiltRight',
 };
 const PRESET_TO_KEBAB = {
   'idle': 'idle',
   'listening': 'listening',
   'talkingIdle': 'talking-idle',
   'embarrassedHold': 'embarrassed',
+  'lookLeft': 'look-left',
+  'lookRight': 'look-right',
+  'lookUp': 'look-up',
+  'lookDown': 'look-down',
+  'lookUpLeft': 'look-up-left',
+  'lookUpRight': 'look-up-right',
+  'lookDownLeft': 'look-down-left',
+  'lookDownRight': 'look-down-right',
+  'tiltLeft': 'tilt-left',
+  'tiltRight': 'tilt-right',
+};
+
+// Group aliases — expand a single CLI token into multiple presets. `look-set`
+// lays down all 10 glance/tilt motions in one shot.
+const PRESET_GROUP_ALIASES = {
+  'look-set': (LOOK_SET ?? []).map((camel) => PRESET_TO_KEBAB[camel] ?? camel),
 };
 
 
 /* ── Arg parsing ──────────────────────────────────────────────────────── */
 
 function parseArgs(argv) {
-  const args = { _: [], duration: 8.0, fps: 30, personality: 'calm', seed: 1, register: false, presets: [] };
+  // duration: null means "let each preset pick its sensible default (3.5s
+  // for hold/look-* presets, 8.0s for loop presets)". Set explicitly with
+  // --duration to override.
+  const args = { _: [], duration: null, fps: 30, personality: 'calm', seed: 1, register: false, presets: [] };
   let i = 0;
   while (i < argv.length) {
     const a = argv[i];
@@ -59,7 +91,19 @@ function parseArgs(argv) {
     else if (a === '--register')    { args.register = true; }
     else if (a === '--preset')      {
       const v = argv[++i];
-      for (const piece of v.split(',')) args.presets.push(piece.trim());
+      for (const piece of v.split(',')) {
+        const slug = piece.trim();
+        if (!slug) continue;
+        // Expand group aliases (look-set → all 10 look-* presets). Plain
+        // preset slugs pass through unchanged for KEBAB_TO_PRESET lookup
+        // downstream.
+        const expanded = PRESET_GROUP_ALIASES[slug];
+        if (Array.isArray(expanded)) {
+          for (const sub of expanded) args.presets.push(sub);
+        } else {
+          args.presets.push(slug);
+        }
+      }
     }
     else if (a === '--help' || a === '-h') { args.help = true; }
     else if (a.startsWith('--'))    { console.error(`Unknown flag: ${a}`); process.exit(1); }
@@ -132,8 +176,9 @@ Usage:
 Options:
   --preset <name>        Repeat or comma-separate. Default: idle
   ${presetList}
+                         Group alias: 'look-set' expands to all 10 look-*/tilt-* presets.
   --out <path>           Single-preset output override (default: <model>_<preset>.motion3.json)
-  --duration <seconds>   Motion duration (default: 8.0)
+  --duration <seconds>   Motion duration (default: 3.5 for hold, 8.0 for loop)
   --fps <n>              Meta.Fps (default: 30)
   --personality <name>   ${PERSONALITY_PRESETS.join(' | ')} (default: calm)
   --seed <int>           Deterministic seed (default: 1)
@@ -164,7 +209,8 @@ async function main() {
     console.error(`Model file not found: ${model3Path}`);
     process.exit(1);
   }
-  if (!Number.isFinite(args.duration) || args.duration < 1 || args.duration > 60) {
+  if (args.duration !== null
+      && (!Number.isFinite(args.duration) || args.duration < 1 || args.duration > 60)) {
     console.error(`Invalid --duration ${args.duration} (must be 1..60)`);
     process.exit(1);
   }
@@ -177,13 +223,18 @@ async function main() {
   const usingExplicitOut = !!args.out && presets.length === 1;
 
   for (const preset of presets) {
+    // Per-preset duration default: hold/look-* motions are short glances
+    // (~3.5s, matches Kora reference); loop presets stay at 8s. CLI's
+    // explicit --duration overrides for both.
+    const presetCycleType = PRESETS[preset]?.cycleType ?? 'loop';
+    const durationSec = args.duration ?? (presetCycleType === 'hold' ? 3.5 : 8.0);
     let result;
     try {
       result = buildMotion3({
         preset,
         paramIds,
         physicsOutputIds,
-        durationSec: args.duration,
+        durationSec,
         fps: args.fps,
         personality: args.personality,
         seed: args.seed,

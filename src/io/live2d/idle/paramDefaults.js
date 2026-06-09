@@ -153,6 +153,92 @@ export const EMBARRASSED_HOLD_PARAMS = {
 };
 
 
+// ─── Preset family: look-* ──────────────────────────────────────────────────
+// "Glance" motions — head/body/eyes target a direction, hold briefly, then
+// partially return through rest. Modelled on Kora_Shorts.motion3.json's
+// look_right.motion3.json: 3.5s duration, single blink near the attack,
+// breath continues independently, body follows head with smaller amplitude.
+//
+// Each look preset is built from a single TARGET 5-tuple
+//   (angleX, angleY, angleZ, eyeBallX, eyeBallY)
+// fed through the helper below. Body angles follow head at 0.25× magnitude
+// (matches Kora reference: head peak -24°, body peak -6°).
+//
+// Cubism convention (uninverted):
+//   - ParamAngleX positive = head turns RIGHT
+//   - ParamAngleY positive = head looks UP
+//   - ParamAngleZ positive = head tilts so RIGHT ear goes DOWN
+//   - ParamEyeBallX positive = eyes look RIGHT
+//   - ParamEyeBallY positive = eyes look UP
+// Models that ship with INVERTED rigs need the targets sign-flipped; the
+// auto-rig keeps the standard convention, so look-right targets +X here.
+//
+// shared sub-blocks (breath / blink / mouth / brows) — same for every look
+// preset, hoisted so a tweak ripples through all 10 directions at once.
+const LOOK_BREATH = { ...r('ParamBreath'),     kind: 'sine',     cfg: { amplitude: 0.5, period: 3500, phase: -Math.PI / 2, mid: 0.5 } };
+const LOOK_BLINK_L  = { ...r('ParamEyeLOpen'),   kind: 'blink',    cfg: { intervalAvgMs: 99999, intervalJitterMs: 0, closedDurationMs: 70, openValue: 1, closedValue: 0, edgeBufferMs: 350 }, syncWith: 'ParamEyeROpen' };
+const LOOK_BLINK_R  = { ...r('ParamEyeROpen'),   kind: 'blink',    cfg: { intervalAvgMs: 99999, intervalJitterMs: 0, closedDurationMs: 70, openValue: 1, closedValue: 0, edgeBufferMs: 350 }, syncWith: 'ParamEyeLOpen' };
+const LOOK_BROW_L  = { ...r('ParamBrowLY'),     kind: 'constant', cfg: { value: 0 } };
+const LOOK_BROW_R  = { ...r('ParamBrowRY'),     kind: 'constant', cfg: { value: 0 } };
+const LOOK_MOUTH_O = { ...r('ParamMouthOpenY'), kind: 'constant', cfg: { value: 0 } };
+const LOOK_MOUTH_F = { ...r('ParamMouthForm'),  kind: 'constant', cfg: { value: 0 } };
+const LOOK_CHEEK   = { ...r('ParamCheek'),      kind: 'constant', cfg: { value: 0 } };
+
+/**
+ * Build a look-* preset table from a 5-tuple of head/eye targets.
+ *
+ * `headTarget = { x, y, z }` — peak head angles in degrees (±30 max).
+ * `eyeTarget  = { x, y }`    — peak eyeball position (±1 normalised).
+ * `bodyScale` — body angles follow head at this fraction (default 0.22 →
+ *   head -24° drives body -5.3°, matches Kora reference).
+ *
+ * Internal: every animated param uses `kind: 'poseHold'` with
+ *   attackFrac=0.55, holdFrac=0.25, returnFrac=0.92
+ * — same temporal shape across the whole motion so all targets reach peak
+ * simultaneously around t≈0.55D, hold to t≈0.80D, ease back through the
+ * tail. Mirrors the Kora reference's coordinated head+body+eye glance.
+ */
+function makeLookPreset(headTarget, eyeTarget, bodyScale = 0.22) {
+  const poseCfg = (target) => ({
+    target,
+    mid: 0,
+    attackFrac: 0.55,
+    holdFrac: 0.25,
+    returnFrac: 0.92,
+    samples: 48,
+  });
+  return {
+    ParamAngleX:     { ...r('ParamAngleX'),     kind: 'poseHold', cfg: poseCfg(headTarget.x) },
+    ParamAngleY:     { ...r('ParamAngleY'),     kind: 'poseHold', cfg: poseCfg(headTarget.y) },
+    ParamAngleZ:     { ...r('ParamAngleZ'),     kind: 'poseHold', cfg: poseCfg(headTarget.z) },
+    ParamBodyAngleX: { ...r('ParamBodyAngleX'), kind: 'poseHold', cfg: poseCfg(headTarget.x * bodyScale) },
+    ParamBodyAngleY: { ...r('ParamBodyAngleY'), kind: 'poseHold', cfg: poseCfg(headTarget.y * bodyScale) },
+    ParamBodyAngleZ: { ...r('ParamBodyAngleZ'), kind: 'poseHold', cfg: poseCfg(headTarget.z * bodyScale) },
+    ParamBreath:     LOOK_BREATH,
+    ParamEyeLOpen:   LOOK_BLINK_L,
+    ParamEyeROpen:   LOOK_BLINK_R,
+    ParamEyeBallX:   { ...r('ParamEyeBallX'),   kind: 'poseHold', cfg: poseCfg(eyeTarget.x) },
+    ParamEyeBallY:   { ...r('ParamEyeBallY'),   kind: 'poseHold', cfg: poseCfg(eyeTarget.y) },
+    ParamBrowLY:     LOOK_BROW_L,
+    ParamBrowRY:     LOOK_BROW_R,
+    ParamMouthOpenY: LOOK_MOUTH_O,
+    ParamMouthForm:  LOOK_MOUTH_F,
+    ParamCheek:      LOOK_CHEEK,
+  };
+}
+
+export const LOOK_LEFT_PARAMS       = makeLookPreset({ x: -25, y:  0,  z: -2 }, { x: -0.9, y:  0.0 });
+export const LOOK_RIGHT_PARAMS      = makeLookPreset({ x:  25, y:  0,  z:  2 }, { x:  0.9, y:  0.0 });
+export const LOOK_UP_PARAMS         = makeLookPreset({ x:   0, y: 22,  z:  0 }, { x:  0.0, y:  0.9 });
+export const LOOK_DOWN_PARAMS       = makeLookPreset({ x:   0, y: -20, z:  0 }, { x:  0.0, y: -0.9 });
+export const LOOK_UP_LEFT_PARAMS    = makeLookPreset({ x: -18, y:  18, z: -3 }, { x: -0.7, y:  0.7 });
+export const LOOK_UP_RIGHT_PARAMS   = makeLookPreset({ x:  18, y:  18, z:  3 }, { x:  0.7, y:  0.7 });
+export const LOOK_DOWN_LEFT_PARAMS  = makeLookPreset({ x: -18, y: -15, z: -3 }, { x: -0.7, y: -0.7 });
+export const LOOK_DOWN_RIGHT_PARAMS = makeLookPreset({ x:  18, y: -15, z:  3 }, { x:  0.7, y: -0.7 });
+export const TILT_LEFT_PARAMS       = makeLookPreset({ x:   0, y:  0, z: -22 }, { x:  0.0, y:  0.0 });
+export const TILT_RIGHT_PARAMS      = makeLookPreset({ x:   0, y:  0, z:  22 }, { x:  0.0, y:  0.0 });
+
+
 // ─── Preset registry ────────────────────────────────────────────────────────
 // Use `getPresetTable(name)` to dispatch by preset name. Adding a new preset
 // is one entry here + one PARAMS table above.
@@ -161,7 +247,29 @@ export const PRESETS = Object.freeze({
   listening:      { params: LISTENING_PARAMS,       label: 'Listening',      description: 'Attentive pose with periodic acknowledgement nods',           cycleType: 'loop' },
   talkingIdle:    { params: TALKING_IDLE_PARAMS,    label: 'Talking idle',   description: 'Speech-tempo mouth + emphasis tilts and brow raises',         cycleType: 'loop' },
   embarrassedHold:{ params: EMBARRASSED_HOLD_PARAMS, label: 'Embarrassed',    description: 'Sustained shy expression — head down, eyes away, blush hold', cycleType: 'hold' },
+  lookLeft:       { params: LOOK_LEFT_PARAMS,       label: 'Look left',      description: 'Glance left — head + eyes track left, body follows',          cycleType: 'hold' },
+  lookRight:      { params: LOOK_RIGHT_PARAMS,      label: 'Look right',     description: 'Glance right — head + eyes track right, body follows',        cycleType: 'hold' },
+  lookUp:         { params: LOOK_UP_PARAMS,         label: 'Look up',        description: 'Look up — head tilts up, eyes rise',                          cycleType: 'hold' },
+  lookDown:       { params: LOOK_DOWN_PARAMS,       label: 'Look down',      description: 'Look down — head tucks, eyes drop',                           cycleType: 'hold' },
+  lookUpLeft:     { params: LOOK_UP_LEFT_PARAMS,    label: 'Look up-left',   description: 'Diagonal glance up + left',                                   cycleType: 'hold' },
+  lookUpRight:    { params: LOOK_UP_RIGHT_PARAMS,   label: 'Look up-right',  description: 'Diagonal glance up + right',                                  cycleType: 'hold' },
+  lookDownLeft:   { params: LOOK_DOWN_LEFT_PARAMS,  label: 'Look down-left', description: 'Diagonal glance down + left',                                 cycleType: 'hold' },
+  lookDownRight:  { params: LOOK_DOWN_RIGHT_PARAMS, label: 'Look down-right',description: 'Diagonal glance down + right',                                cycleType: 'hold' },
+  tiltLeft:       { params: TILT_LEFT_PARAMS,       label: 'Tilt left',      description: 'Head rolls left ear-down (no yaw)',                           cycleType: 'hold' },
+  tiltRight:      { params: TILT_RIGHT_PARAMS,      label: 'Tilt right',     description: 'Head rolls right ear-down (no yaw)',                          cycleType: 'hold' },
 });
+
+/**
+ * Look-set alias: every glance preset. CLI's `--preset look-set` expands
+ * to this list so a single command lays down the full pose-set in one shot.
+ */
+export const LOOK_SET = Object.freeze([
+  'lookLeft', 'lookRight',
+  'lookUp', 'lookDown',
+  'lookUpLeft', 'lookUpRight',
+  'lookDownLeft', 'lookDownRight',
+  'tiltLeft', 'tiltRight',
+]);
 
 export const PRESET_NAMES = Object.freeze(Object.keys(PRESETS));
 
