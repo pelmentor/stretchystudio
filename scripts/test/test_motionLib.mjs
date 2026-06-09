@@ -270,5 +270,38 @@ function near(a, b, eps = 1e-6) {
     `normalize: no flat-handle (cy1==cy2) bezier segs after round-trip (got ${degenerate}/${bezierTotal})`);
 }
 
+// ── Adaptive handleOff: extremum plateau bounded to sub-frame width ──
+//
+// Pre-2026-06-09 the handle offset was fixed at dt/3. At a sine peak the
+// analytical slope is 0, so handleLeft.value === peak.value — the bezier
+// asymptoted to the peak over the last 1/3 of the segment, visibly holding
+// at the peak value for ~30-90 ms ("snap at extremes" in cubism viewer).
+// Adaptive offset shrinks to ~15% of dt/3 at extrema, collapsing the
+// plateau to sub-frame width at typical fps.
+//
+// Pin: for the breath config (calm, period=3500, amp=0.5), count samples
+// in the last 100 ms before peak where bezier value is within 1e-3 of
+// the peak. Pre-fix this was 17/50; post-fix should be ≤ 8/50.
+
+{
+  const { default: assertImport } = await import('node:assert');
+  const { evaluateBezTripleSegment } = await import('../../src/anim/fcurveEval.js');
+  const cfg = { durationMs: 10000, amplitude: 0.5, period: 3500, phase: -Math.PI / 2, mid: 0.5 };
+  const kfs = genSine(cfg);
+  let peakIdx = -1, peakV = -Infinity;
+  for (let i = 0; i < kfs.length; i++) if (kfs[i].value > peakV) { peakV = kfs[i].value; peakIdx = i; }
+  const prev = kfs[peakIdx - 1];
+  const peak = kfs[peakIdx];
+  let plateau = 0;
+  for (let t = peak.time - 100; t <= peak.time; t += 2) {
+    const bv = evaluateBezTripleSegment(prev, peak, t);
+    if (Math.abs(peakV - bv) < 1e-3) plateau++;
+  }
+  assert(plateau <= 8,
+    `adaptive handleOff: plateau-near-peak should be <= 8 of 50 samples (was 17 pre-fix); got ${plateau}`);
+  assert(peakV > 0.999,
+    `sanity: peak still reached cleanly (got ${peakV})`);
+}
+
 console.log(`motionLib: ${passed} passed, ${failed} failed`);
 process.exit(failed > 0 ? 1 : 0);

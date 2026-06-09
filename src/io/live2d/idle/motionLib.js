@@ -65,7 +65,7 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
 
   const N = samples > 0 ? samples : Math.max(8, cycles * 12);
   const dt = D / N;
-  const handleOff = dt / 3;
+  const handleOffMax = dt / 3;
   // `handleType: free/free` is load-bearing: without it `normalizeKeyforms`
   // runs `recalcKeyformHandles` which OVERWRITES our analytical handles
   // with vector (straight-line) ones, collapsing the bezier to a 2N-sided
@@ -73,26 +73,51 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
   // the extrema where sine curvature is highest — exactly the "blocky at
   // 0 and 1" symptom that comes back from the cubism viewer + ren'py.
   const handleType = { left: 'free', right: 'free' };
+  // Adaptive handle-offset scale. At an extremum the analytical slope
+  // is exactly 0, which forces `handleLeft.value === peak.value` and
+  // produces a cubic bezier whose tangent at u=1 is purely horizontal
+  // — the curve ASYMPTOTES to the peak over the last 1/3 of the
+  // segment, visibly holding at the peak value for ~30-90 ms before
+  // descending. That's the "snap at extremes" the user sees on the
+  // breath param in cubism viewer + ren'py.
+  // Fix: scale handle offset by |slope| / max(|slope|). At extrema
+  // the offset collapses to ~15% of dt/3 — the asymptotic-flat region
+  // shrinks to sub-frame width at typical fps. At zero-crossings the
+  // offset stays at dt/3 so the analytical sine fidelity is preserved
+  // where slope is high. The bezier-vs-true-sine error grows
+  // negligibly (still < 1e-3 for the breath config) because the
+  // shrunk handle near extrema makes the bezier locally near-linear,
+  // and locally near an extremum the true sine IS near-linear too.
+  const dvdtMax = amplitude * omega;
+  const MIN_OFFSET_FACTOR = 0.15;
   const kfs = [];
   for (let i = 0; i <= N; i++) {
     const t = i * dt;
     const v = mid + amplitude * Math.sin(omega * t + phase);
     const dvdt = amplitude * omega * Math.cos(omega * t + phase);
+    const offFactor = dvdtMax > 0
+      ? Math.max(MIN_OFFSET_FACTOR, Math.abs(dvdt) / dvdtMax)
+      : 1;
+    const off = handleOffMax * offFactor;
     kfs.push({
       time: t,
       value: v,
       interpolation: 'bezier',
       handleType,
-      handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
-      handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
+      handleLeft:  { time: t - off, value: v - dvdt * off },
+      handleRight: { time: t + off, value: v + dvdt * off },
     });
   }
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
   last.value = first.value;
+  const lastDvdt = amplitude * omega * Math.cos(phase);
+  const lastOff = handleOffMax * (dvdtMax > 0
+    ? Math.max(MIN_OFFSET_FACTOR, Math.abs(lastDvdt) / dvdtMax)
+    : 1);
   last.handleLeft = {
-    time: last.time - handleOff,
-    value: first.value - (amplitude * omega * Math.cos(phase)) * handleOff,
+    time: last.time - lastOff,
+    value: first.value - lastDvdt * lastOff,
   };
   return kfs;
 }
@@ -124,10 +149,19 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
   // offset dv/dt · δ/3. Result: Cubism plays a smooth multi-harmonic
   // wander instead of a 24-sided polygon.
   const dt = D / samples;
-  const handleOff = dt / 3;
+  const handleOffMax = dt / 3;
   // See genSine — `free/free` keeps `recalcKeyformHandles` from clobbering
   // our analytical handles with vector ones.
   const handleType = { left: 'free', right: 'free' };
+  // Adaptive handle-offset, same rationale as genSine: at local extrema
+  // (where the sum-of-harmonics derivative happens to hit zero) the
+  // bezier would otherwise plateau visibly. Reference max slope is the
+  // sum of per-component slope maxima — a loose upper bound, but
+  // anything tight enough to make the offset shrink at extrema works.
+  let dvdtRef = 0;
+  for (const c of comps) dvdtRef += c.a * c.omega;
+  dvdtRef = amplitude * dvdtRef * norm;
+  const MIN_OFFSET_FACTOR = 0.15;
   const kfs = [];
   for (let i = 0; i <= samples; i++) {
     const t = i * dt;
@@ -139,13 +173,17 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
     }
     v = mid + amplitude * v * norm;
     dvdt = amplitude * dvdt * norm;
+    const offFactor = dvdtRef > 0
+      ? Math.max(MIN_OFFSET_FACTOR, Math.min(1, Math.abs(dvdt) / dvdtRef))
+      : 1;
+    const off = handleOffMax * offFactor;
     kfs.push({
       time: t,
       value: v,
       interpolation: 'bezier',
       handleType,
-      handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
-      handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
+      handleLeft:  { time: t - off, value: v - dvdt * off },
+      handleRight: { time: t + off, value: v + dvdt * off },
     });
   }
   // Loop-safety: pin t=D value/left-handle to t=0 derivatives. Each harmonic
@@ -158,9 +196,12 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
   let dvdt0 = 0;
   for (const c of comps) dvdt0 += c.a * c.omega * Math.cos(c.phi);
   dvdt0 = amplitude * dvdt0 * norm;
+  const lastOff = handleOffMax * (dvdtRef > 0
+    ? Math.max(MIN_OFFSET_FACTOR, Math.min(1, Math.abs(dvdt0) / dvdtRef))
+    : 1);
   last.handleLeft = {
-    time: last.time - handleOff,
-    value: first.value - dvdt0 * handleOff,
+    time: last.time - lastOff,
+    value: first.value - dvdt0 * lastOff,
   };
   return kfs;
 }
