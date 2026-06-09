@@ -826,6 +826,173 @@ export function TimelineEditor() {
   const totalFrames = Math.max(endFrame - startFrame, 1);
   const labelStep = totalFrames <= 48 ? 2 : totalFrames <= 120 ? 5 : totalFrames <= 240 ? 10 : totalFrames <= 480 ? 20 : 50;
 
+  /* ── KeyG = modal grab on selected keyforms (Blender parity) ────────── */
+  // Press G with one or more keyforms selected → enter modal grab.
+  // Cursor X movement translates the selection in real time (mutates
+  // kf.time directly via skipHistory updates; original positions are
+  // snapshot on entry and restored on cancel). Commit: LMB / Enter /
+  // G again. Cancel: RMB / Esc. Mirrors `transform.transform mode='TIME_TRANSLATE'`
+  // (`keymap_data/blender_default.py:2718-2719`) — the dopesheet's
+  // modal grab op. Capture-phase listener + stopImmediatePropagation
+  // so the global dispatcher's `selection.delete` / etc. don't fire on
+  // chord overlap.
+  const grabStateRef = useRef(/** @type {null | {anchorX:number, origByItem:Array<{rowKey:string,paramId:string|null,trackNodeId:string|null,prop:string|null,origTimeMs:number}>}} */ (null));
+  const lastPointerXRef = useRef(/** @type {number|null} */ (null));
+  // Track latest pointer X over the editor for the G anchor.
+  useEffect(() => {
+    const onMove = (e) => { lastPointerXRef.current = e.clientX; };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, []);
+  // Refs the keydown closure needs to read at fire time.
+  const animationRefForG = useRef(animation);
+  const selectedKeyframesRefForG = useRef(selectedKeyframes);
+  const fpsRefForG = useRef(fps);
+  useEffect(() => { animationRefForG.current = animation; }, [animation]);
+  useEffect(() => { selectedKeyframesRefForG.current = selectedKeyframes; }, [selectedKeyframes]);
+  useEffect(() => { fpsRefForG.current = fps; }, [fps]);
+  useEffect(() => {
+    const exitGrab = (commit) => {
+      const g = grabStateRef.current;
+      if (!g) return;
+      if (!commit) {
+        // Cancel — restore original times for every grabbed kf.
+        update((p) => {
+          const a = getActiveSceneAction(p, activeActionId);
+          if (!a) return;
+          for (const item of g.origByItem) {
+            const fc = item.paramId
+              ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
+              : a.fcurves.find((f) => {
+                  const t = decodeFCurveTarget(f);
+                  return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
+                });
+            if (!fc) continue;
+            // The kf was renamed by mutating .time; we tracked the
+            // CURRENT time on `g` so find by that and restore.
+            const kf = fc.keyforms.find((k) => k.time === item.currentTimeMs);
+            if (kf) kf.time = item.origTimeMs;
+          }
+          for (const f of a.fcurves) {
+            const cap = captureActiveKeyformObject(f);
+            f.keyforms.sort((k1, k2) => k1.time - k2.time);
+            relocateActiveKeyformByObject(a, f.id, cap);
+          }
+        }, { skipHistory: true });
+      }
+      endBatch();
+      grabStateRef.current = null;
+      window.removeEventListener('pointermove', onPtrMove, true);
+      window.removeEventListener('pointerdown', onPtrDown, true);
+      window.removeEventListener('keydown', onModalKey, true);
+    };
+    const onPtrMove = (ev) => {
+      const g = grabStateRef.current;
+      if (!g) return;
+      const dragFrameDelta = xToFrame(ev.clientX) - xToFrame(g.anchorX);
+      if (dragFrameDelta === g.lastDelta) return;
+      g.lastDelta = dragFrameDelta;
+      const nextSel = new Set();
+      update((p) => {
+        const a = getActiveSceneAction(p, activeActionId);
+        if (!a) return;
+        for (const item of g.origByItem) {
+          const fc = item.paramId
+            ? a.fcurves.find((f) => fcurveTargetsParam(f, item.paramId))
+            : a.fcurves.find((f) => {
+                const t = decodeFCurveTarget(f);
+                return t?.kind === 'node' && t.nodeId === item.trackNodeId && t.property === item.prop;
+              });
+          if (!fc) continue;
+          const kf = fc.keyforms.find((k) => k.time === item.currentTimeMs);
+          if (!kf) continue;
+          const newFrame = msToFrame(item.origTimeMs, fpsRefForG.current) + dragFrameDelta;
+          const newTime = frameToMs(newFrame, fpsRefForG.current);
+          kf.time = newTime;
+          item.currentTimeMs = newTime;
+          nextSel.add(`${item.rowKey}:${newTime}`);
+        }
+        for (const f of a.fcurves) {
+          const cap = captureActiveKeyformObject(f);
+          f.keyforms.sort((k1, k2) => k1.time - k2.time);
+          relocateActiveKeyformByObject(a, f.id, cap);
+        }
+      }, { skipHistory: true });
+      if (nextSel.size > 0) setSelectedKeyframes(nextSel);
+    };
+    const onPtrDown = (ev) => {
+      if (!grabStateRef.current) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      // LMB (button 0) commits; RMB (button 2) cancels. Anything else
+      // is ignored.
+      if (ev.button === 0) exitGrab(true);
+      else if (ev.button === 2) exitGrab(false);
+    };
+    const onModalKey = (ev) => {
+      if (!grabStateRef.current) return;
+      if (ev.code === 'Enter' || ev.code === 'KeyG') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        exitGrab(true);
+      } else if (ev.code === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        exitGrab(false);
+      }
+    };
+    const onKeyG = (ev) => {
+      if (!hoverRef.current) return;
+      if (ev.code !== 'KeyG') return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (ev.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (grabStateRef.current) return;
+      const sel = selectedKeyframesRefForG.current;
+      if (!sel || sel.size === 0) return;
+      const anim = animationRefForG.current;
+      if (!anim) return;
+      const anchorX = lastPointerXRef.current;
+      if (typeof anchorX !== 'number') return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      // Snapshot origin times for every kf currently selected.
+      const origByItem = [];
+      for (const fc of anim.fcurves) {
+        const target = decodeFCurveTarget(fc);
+        if (!target) continue;
+        const fcurveRowKey = target.kind === 'param' ? `param:${target.paramId}` : `node:${target.nodeId}`;
+        for (const kf of fc.keyforms) {
+          if (sel.has(`${fcurveRowKey}:${kf.time}`)) {
+            origByItem.push({
+              rowKey: fcurveRowKey,
+              paramId: target.kind === 'param' ? target.paramId : null,
+              trackNodeId: target.kind === 'node' ? target.nodeId : null,
+              prop: target.kind === 'node' ? target.property : null,
+              origTimeMs: kf.time,
+              currentTimeMs: kf.time,
+            });
+          }
+        }
+      }
+      if (origByItem.length === 0) return;
+      beginBatch(useProjectStore.getState().project);
+      grabStateRef.current = { anchorX, origByItem, lastDelta: 0 };
+      window.addEventListener('pointermove', onPtrMove, true);
+      window.addEventListener('pointerdown', onPtrDown, true);
+      window.addEventListener('keydown', onModalKey, true);
+    };
+    window.addEventListener('keydown', onKeyG, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', onKeyG, { capture: true });
+      // If unmounting mid-grab, restore + cleanup.
+      if (grabStateRef.current) exitGrab(false);
+    };
+  }, [activeActionId, update]);
+
   /* ── KeyA = select-all keyforms inside this editor ──────────────────── */
   // Pre-fix Timeline had no KeyA binding, so the user's Blender muscle-
   // memory press went straight through to the global operator
