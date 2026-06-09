@@ -87,6 +87,7 @@ console.log('\n§1 getAutoKeyMode coalescing');
   eq(getAutoKeyMode({ autoKeyMode: 'all' }), 'all', '§1.2 explicit all');
   eq(getAutoKeyMode({ autoKeyMode: 'activeSet' }), 'activeSet', '§1.2 activeSet passes through');
   eq(getAutoKeyMode({ autoKeyMode: 'available' }), 'available', '§1.2 available passes through');
+  eq(getAutoKeyMode({ autoKeyMode: 'record' }), 'record', '§1.2 record passes through');
 
   // Unknown value coalesces to 'all' with console.warn (silence test stderr)
   const origWarn = console.warn;
@@ -101,7 +102,8 @@ console.log('\n§1 getAutoKeyMode coalescing');
 
   // Frozen tuple sanity
   ok(Object.isFrozen(AUTOKEY_MODES), '§1.4 AUTOKEY_MODES is frozen');
-  eq(AUTOKEY_MODES.length, 3, '§1.4 AUTOKEY_MODES has 3 entries');
+  eq(AUTOKEY_MODES.length, 4, '§1.4 AUTOKEY_MODES has 4 entries');
+  ok(AUTOKEY_MODES.includes('record'), '§1.4 AUTOKEY_MODES includes record');
 }
 
 // ── §2 pickActiveSetIdForAutoKey ─────────────────────────────────────
@@ -250,6 +252,21 @@ console.log('\n§5 runAutoKey available mode');
   const newKf = fcX.keyforms.find((k) => k.time === 2000);
   ok(newKf, '§5.2 new keyform inserted at time=2000');
   eq(newKf.value, 17, '§5.2 new keyform value = current transform.x (17)');
+}
+
+// ── §7 record mode — drag-end shares 'all' fan-out, preserves diagnostic ─
+console.log('\n§7 runAutoKey record mode');
+{
+  resetDispatched();
+  const r = runAutoKey({ autoKeyMode: 'record' });
+  eq(r.mode, 'record', '§7.1 returns mode=record (NOT all — diagnostic preserved)');
+  eq(r.dispatched, 'synthetic-K-keydown', '§7.1 dispatched via synthetic K (same as all)');
+  eq(dispatched.length, 1, '§7.1 dispatched exactly one event');
+  eq(dispatched[0].key, 'K', '§7.1 K key dispatched');
+
+  // The per-frame live-preview capture itself is exercised via
+  // insertKeyformAtInAction in test_insertKeyframe; here we verify only
+  // that runAutoKey doesn't break on the new mode.
 }
 
 // ── §6 sparse storage roundtrip ──────────────────────────────────────

@@ -38,7 +38,9 @@ import { getActiveSceneAction } from '@/anim/sceneAction';
 // scope: only param drivers reach the eval substrate; transform-driver
 // wiring lands with the depgraph default-flip in Phase 0.D.0.
 import { evaluateProjectDrivers, driverOverridesToParamMap } from '@/anim/driverPass';
-import { runAutoKey } from '@/anim/autoKeyDispatch';
+import { runAutoKey, getAutoKeyMode } from '@/anim/autoKeyDispatch';
+import { insertKeyformAtInAction, INSERTKEY_FLAGS } from '@/anim/insertKeyframe';
+import { frameToMs, msToFrame } from '@/lib/timeMath';
 // Phase 7 Slice 7.E -- K-key first-use toast emitted from the K-key
 // handler below (post-guards, pre-recipe). `toast` is fire-and-forget;
 // suppression is gated by `preferences.kKeyFirstUseShown`.
@@ -372,6 +374,14 @@ export default function CanvasViewport({
   // at the last cursor position instead of returning to rest pose
   // like Cubism Viewer does.
   const lookDampRef = useRef({ x: 0, y: 0 });
+
+  // Auto-key `record` mode session state. Tracks the last frame number
+  // we wrote keys at (so we don't write the same frame 4× per playback
+  // second at 60 Hz rAF / 24 fps action) and whether we've already
+  // taken an undo snapshot for the current recording session (so Ctrl+Z
+  // returns to the pre-record state instead of stepping through every
+  // recorded frame). Reset on every play→stop transition.
+  const recordSessionRef = useRef(/** @type {{lastFrame: number, snapshotTaken: boolean} | null} */ (null));
 
   // Phase -1D — set of partIds that evalRig produced but no node
   // matched. Used to dedupe console warnings (only log once per ID
@@ -983,6 +993,56 @@ export default function CanvasViewport({
             // the next idle frame's identity check to hit.
             paramValuesRef.current = useParamValuesStore.getState().values;
             isDirtyRef.current = true;
+
+            // AutoKey `record` mode — snapshot the just-written driver
+            // values into the active action's fcurves at the playhead
+            // frame. Gated on:
+            //   - editor is in animation mode (record makes no sense
+            //     in viewport/pose editing)
+            //   - `editor.autoKeyframe` is on (the record-record-dot
+            //     toggle that gates ALL auto-key flow)
+            //   - mode is 'record' (the dropdown next to the dot)
+            //   - playback is currently running (no point recording
+            //     while the user is scrubbing or stopped)
+            //   - the playhead has crossed into a new frame number
+            //     since the last write (rAF runs at ~60 Hz; the
+            //     action's fps is typically 24/30 — we'd write 2-3
+            //     duplicate keys per frame otherwise)
+            const _projForKey = projectRef.current;
+            if (_projForKey
+                && getEditorMode() === 'animation'
+                && editorRef.current?.autoKeyframe
+                && getAutoKeyMode(_projForKey) === 'record'
+                && animRef.current?.isPlaying) {
+              const _anim = animRef.current;
+              const _action = getActiveSceneAction(_projForKey, _anim.activeActionId);
+              if (_action) {
+                const _fps = _action.fps ?? _anim.fps ?? 24;
+                const _frame = msToFrame(_anim.currentTime, _fps);
+                const _session = recordSessionRef.current;
+                if (!_session || _session.lastFrame !== _frame) {
+                  const _snappedMs = frameToMs(_frame, _fps);
+                  const _firstWriteOfSession = !_session?.snapshotTaken;
+                  // First write of a session keeps history so Ctrl+Z
+                  // restores the pre-record state; subsequent writes
+                  // skipHistory so a 600-frame record doesn't make
+                  // 600 undo entries.
+                  useProjectStore.getState().updateProject((p) => {
+                    const a = (p.actions ?? []).find((x) => x.id === _action.id);
+                    if (!a) return;
+                    for (const paramId of Object.keys(realUpdates)) {
+                      const rnaPath = `objects["__params__"].values["${paramId}"]`;
+                      insertKeyformAtInAction(a, rnaPath, _snappedMs, realUpdates[paramId], INSERTKEY_FLAGS.NOFLAGS);
+                    }
+                  }, { skipHistory: !_firstWriteOfSession });
+                  recordSessionRef.current = { lastFrame: _frame, snapshotTaken: true };
+                }
+              }
+            } else if (recordSessionRef.current && !animRef.current?.isPlaying) {
+              // Reset session when playback stops so the next play
+              // gets its own pre-record undo snapshot.
+              recordSessionRef.current = null;
+            }
           }
         }
         // R12: `valuesForEval` is always `paramValuesRef.current`

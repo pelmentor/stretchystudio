@@ -31,6 +31,22 @@
  *                 to setting `INSERTKEY_AVAILABLE` on an unfiltered
  *                 emit).
  *
+ *   `'record'`    - SS extension; no direct Blender analogue. Behaves
+ *                 like `'all'` on drag-end commits (same K-key fan-
+ *                 out), AND additionally captures live-preview-driven
+ *                 param values (breath / blink / cursor-look / physics
+ *                 outputs) into the active action's fcurves on every
+ *                 frame transition during playback in the Live
+ *                 Preview surface. The per-frame capture path lives
+ *                 in `CanvasViewport.jsx`'s livePreview block — it's
+ *                 a fast inline call to `insertKeyformAtInAction`, not
+ *                 a `runAutoKey` dispatch, because the rAF tick can't
+ *                 afford the synthetic-event round trip. Closest
+ *                 Blender analogue is "Bake Action" (`nla_ops.cc`
+ *                 `NLA_OT_bake`) which converts driver outputs to
+ *                 keyframes for a range — SS's record is the live
+ *                 version: bake as you play.
+ *
  * **Synthetic K-key dispatch (Rule №1 caveat).** The `'all'` mode
  * dispatches a synthetic `KeyboardEvent('keydown', {key:'K'})` to
  * route through the legacy K-key handler at
@@ -58,8 +74,8 @@
 import { execApplyKeyingSet } from '../v3/operators/insertKey.js';
 import { getActiveKeyingSet } from './keyingSets.js';
 
-/** @type {ReadonlyArray<'all' | 'activeSet' | 'available'>} */
-export const AUTOKEY_MODES = Object.freeze(['all', 'activeSet', 'available']);
+/** @type {ReadonlyArray<'all' | 'activeSet' | 'available' | 'record'>} */
+export const AUTOKEY_MODES = Object.freeze(['all', 'activeSet', 'available', 'record']);
 
 /**
  * Resolve the effective auto-key mode for a project. Coalesces the
@@ -68,7 +84,7 @@ export const AUTOKEY_MODES = Object.freeze(['all', 'activeSet', 'available']);
  * unrecognised string is a developer bug, not silent corruption).
  *
  * @param {object|null|undefined} project
- * @returns {'all' | 'activeSet' | 'available'}
+ * @returns {'all' | 'activeSet' | 'available' | 'record'}
  */
 export function getAutoKeyMode(project) {
   const raw = project?.autoKeyMode;
@@ -77,8 +93,8 @@ export function getAutoKeyMode(project) {
   // exported `AUTOKEY_MODES` tuple rather than a parallel literal list,
   // so adding a new mode requires updating one source of truth instead
   // of three (the constant + this guard + runAutoKey's switch).
-  if (AUTOKEY_MODES.includes(/** @type {'all'|'activeSet'|'available'} */ (raw))) {
-    return /** @type {'all'|'activeSet'|'available'} */ (raw);
+  if (AUTOKEY_MODES.includes(/** @type {'all'|'activeSet'|'available'|'record'} */ (raw))) {
+    return /** @type {'all'|'activeSet'|'available'|'record'} */ (raw);
   }
   if (typeof console !== 'undefined') {
     console.warn(`[autoKey] unknown autoKeyMode '${raw}' on project; coalescing to 'all'.`);
@@ -117,7 +133,11 @@ export function pickActiveSetIdForAutoKey(project) {
  */
 export function runAutoKey(project) {
   const mode = getAutoKeyMode(project);
-  switch (mode) {
+  // 'record' mode shares the drag-end fan-out with 'all' (per-frame
+  // live-preview capture is a separate fast-path inside
+  // CanvasViewport.jsx's livePreview block, not a runAutoKey concern).
+  const dragEndMode = mode === 'record' ? 'all' : mode;
+  switch (dragEndMode) {
     case 'all': {
       // Legacy path -- see module header. Synthetic event routes
       // through the K-key handler at CanvasViewport.jsx:1457-1633.
@@ -145,7 +165,10 @@ export function runAutoKey(project) {
         /** @type {any} */ (ev).__ssAutoKey = true;
         window.dispatchEvent(ev);
       }
-      return { mode: 'all', dispatched: 'synthetic-K-keydown' };
+      // Preserve the user-visible mode in the diagnostic record so
+      // logs/UI can distinguish 'all' from 'record' even though the
+      // drag-end dispatch is the same K-key path.
+      return { mode, dispatched: 'synthetic-K-keydown' };
     }
     case 'activeSet': {
       const setId = pickActiveSetIdForAutoKey(project);

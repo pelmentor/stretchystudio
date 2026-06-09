@@ -161,6 +161,7 @@ const AUTOKEY_MODE_LABELS = Object.freeze({
   all:        'AutoKey: All Properties',
   activeSet:  'AutoKey: Active Keying Set',
   available:  'AutoKey: Available',
+  record:     'AutoKey: Record Live Preview',
 });
 
 /** Per-mode tooltip / description text (shown below the radio item). */
@@ -168,6 +169,7 @@ const AUTOKEY_MODE_DESCRIPTIONS = Object.freeze({
   all:       'Key every property of the selection (current SS behaviour).',
   activeSet: 'Key only the active keying set (or LocRotScale if none).',
   available: 'Key only properties that already have an F-Curve.',
+  record:    'Same as All, plus: while playing in Live Preview, write a keyframe for every breath / blink / cursor-look / physics output value on each frame.',
 });
 
 function uid() { return Math.random().toString(36).slice(2, 9); }

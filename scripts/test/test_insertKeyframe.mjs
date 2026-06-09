@@ -7,6 +7,7 @@ import {
   INSERTKEY_FLAGS,
   applyKeyingSet,
   wouldApplyKeyingSetChange,
+  insertKeyformAtInAction,
 } from '../../src/anim/insertKeyframe.js';
 import {
   addKeyingSet,
@@ -594,6 +595,50 @@ const r20c = applyKeyingSet(project20, 'Location', ['partA'], 100, INSERTKEY_FLA
   resolveValue: () => 5,
 });
 eq(r20c.results[0].status, 'skipped-replace', '§20 — LOW-1: malformed action + REPLACE → skipped-replace');
+
+// ── §21 record-mode bulk param capture path ──────────────────────────
+//
+// CanvasViewport's livePreview block calls `insertKeyformAtInAction`
+// once per changed param per frame transition. Verify the helper:
+//   - is exported (regression pin — pre-fix it was file-local)
+//   - creates fresh fcurve on first call (status=created-fcurve)
+//   - replaces value on second call at same time (status=replaced)
+//   - inserts new keyform at distinct time (status=inserted)
+//   - preserves earlier keys (we get a multi-key fcurve over a session)
+
+{
+  const project21 = makeProject();
+  const action = project21.actions.find((a) => a.id === 'sceneAct');
+  const path = 'objects["__params__"].values["ParamBreath"]';
+
+  // Tick 1: frame 0, value 0.0 → fresh fcurve
+  const r1 = insertKeyformAtInAction(action, path, 0, 0.0, INSERTKEY_FLAGS.NOFLAGS);
+  eq(r1.status, 'created-fcurve', '§21.1 first call creates the fcurve');
+  const fc = action.fcurves.find((f) => f.rnaPath === path);
+  ok(fc, '§21.1 fcurve persisted on action');
+  eq(fc.keyforms.length, 1, '§21.1 single keyform after first call');
+  eq(fc.keyforms[0].value, 0.0, '§21.1 keyform value=0.0');
+
+  // Tick 2: same time, new value → replace
+  const r2 = insertKeyformAtInAction(action, path, 0, 0.05, INSERTKEY_FLAGS.NOFLAGS);
+  eq(r2.status, 'replaced', '§21.2 same-time second call replaces');
+  eq(fc.keyforms.length, 1, '§21.2 still one keyform');
+  eq(fc.keyforms[0].value, 0.05, '§21.2 value updated to 0.05');
+
+  // Tick 3: new time → insert
+  const r3 = insertKeyformAtInAction(action, path, 41.6667, 0.15, INSERTKEY_FLAGS.NOFLAGS);
+  eq(r3.status, 'inserted', '§21.3 new-time call inserts');
+  eq(fc.keyforms.length, 2, '§21.3 two keyforms after insert');
+
+  // Tick 4: yet another time → still inserts (recording 3 frames)
+  const r4 = insertKeyformAtInAction(action, path, 83.3333, 0.30, INSERTKEY_FLAGS.NOFLAGS);
+  eq(r4.status, 'inserted', '§21.4 third-time call inserts');
+  eq(fc.keyforms.length, 3, '§21.4 three keyforms after recording 3 frames');
+
+  // Sorted by time (insertion sort in the kernel)
+  ok(fc.keyforms[0].time < fc.keyforms[1].time && fc.keyforms[1].time < fc.keyforms[2].time,
+    '§21.5 keyforms kept sorted by time');
+}
 
 // ─────────────────────────────────────────────────────────────────────
 

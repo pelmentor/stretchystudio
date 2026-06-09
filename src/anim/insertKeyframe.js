@@ -215,7 +215,7 @@ function findKeyformAt(keyforms, time) {
  *   keyformIndex?: number,
  * }}
  */
-function insertKeyformAtInAction(action, rnaPath, time, value, flags) {
+export function insertKeyformAtInAction(action, rnaPath, time, value, flags) {
   if (!Number.isFinite(value)) return { status: 'skipped-non-finite' };
   if (!action || !Array.isArray(action.fcurves)) {
     // Action shape is malformed. Audit-fix LOW-1: prefer
