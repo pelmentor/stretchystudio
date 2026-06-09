@@ -49,7 +49,7 @@
 import { gatherPhysicsRules } from './physicsConfig.js';
 import { evalWarpKernelCubism } from '../runtime/evaluator/cubismWarpEval.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
-import { matchTag } from '../../psdOrganizer.js';
+import { matchTag, extractVariant } from '../../psdOrganizer.js';
 import { resolveVariantFadeRules } from './variantFadeRules.js';
 import {
   isWarpLatticeNode,
@@ -578,23 +578,51 @@ function _buildArtMeshes({ project, nodeById, warpRestById, rotationRestById, in
   // Paired-variant base-fade map. For each non-backdrop base part, list
   // every suffix of every variant that pairs with it. The runtime depgraph
   // multiplies the base's blended opacity by `(1 - paramValue)` per paired
-  // suffix WHEN the keyforms don't already encode the fade. Keeps the
-  // user-rule "only one set of eye layers shown at a time" intact even
-  // when Init Rig was last run before the variants were added — the user
-  // doesn't have to manually re-rig after every variant edit.
+  // suffix so the user-rule "only one set of eye layers shown at a time"
+  // holds even when the variant was added AFTER Init Rig last ran.
   // Backdrop tags (face, ears, hair) are EXCLUDED — face stays at
   // opacity=1 with face.smile layering on top, per Hiyori convention.
+  //
+  // Pairing strategy is dual-mode for maximum robustness:
+  //   1. `variantOf` field — set by `variantNormalizer` after PSD import.
+  //   2. NAME pairing — `extractVariant("irides-l.smile") → "irides-l"`,
+  //      then look up the base by case-insensitive name. Catches every
+  //      variant added post-import (rename, manual paste, drag) where
+  //      `variantNormalizer` hasn't re-run yet. variantNormalizer's own
+  //      `findBasePart` uses the same convention so we get the same
+  //      pairings as the eventual normalizer pass.
   /** @type {Map<string, string[]>} */
   const variantSuffixesByBaseId = new Map();
   const variantFadeRules = resolveVariantFadeRules(project);
   const backdropTagsSet = new Set(variantFadeRules.backdropTags ?? []);
+  /** @type {Map<string, object>} */
+  const partsByLowerName = new Map();
   for (const node of project.nodes ?? []) {
     if (!node || node.type !== 'part') continue;
-    if (typeof node.variantOf !== 'string') continue;
-    if (typeof node.variantSuffix !== 'string' || node.variantSuffix.length === 0) continue;
-    const list = variantSuffixesByBaseId.get(node.variantOf) ?? [];
-    if (!list.includes(node.variantSuffix)) list.push(node.variantSuffix);
-    variantSuffixesByBaseId.set(node.variantOf, list);
+    const name = (typeof node.name === 'string' ? node.name : '').toLowerCase().trim();
+    if (name && !partsByLowerName.has(name)) partsByLowerName.set(name, node);
+  }
+  /** @param {string} baseId @param {string} suffix */
+  const _addPair = (baseId, suffix) => {
+    const list = variantSuffixesByBaseId.get(baseId) ?? [];
+    if (!list.includes(suffix)) list.push(suffix);
+    variantSuffixesByBaseId.set(baseId, list);
+  };
+  for (const node of project.nodes ?? []) {
+    if (!node || node.type !== 'part') continue;
+    // Path 1: explicit variantOf + variantSuffix from variantNormalizer.
+    if (typeof node.variantOf === 'string' && node.variantOf.length > 0
+        && typeof node.variantSuffix === 'string' && node.variantSuffix.length > 0) {
+      _addPair(node.variantOf, node.variantSuffix);
+      continue;
+    }
+    // Path 2: derive from name. Same regex as variantNormalizer's
+    // `findBasePart`, so post-normalize the pairings match.
+    const { baseName, variant } = extractVariant(node.name ?? '');
+    if (!variant) continue;
+    const base = partsByLowerName.get(baseName.toLowerCase().trim());
+    if (!base || base.id === node.id) continue;
+    _addPair(base.id, variant);
   }
   const out = [];
   for (const part of parts) {

@@ -131,38 +131,47 @@ export function kernelArtMeshEval(op, ctx) {
   const meshState = blendKeyforms(keyforms, cell, part.draw_order ?? 500);
   if (!meshState) return null;
 
-  // Paired-variant base-fade override (RULE-№1 belt-and-suspenders).
+  // Paired-variant base-fade override (RULE-№1, hard enforcement).
   // `pairedVariantSuffixes` is non-empty only for non-backdrop bases that
   // have variant siblings — see `_resolvePairedVariantSuffixes` in
-  // selectRigSpec.js. When the runtime keyforms don't already encode the
-  // base-fade-out on Param<Suffix> (i.e. the bindings list doesn't include
-  // that param), multiply blended opacity by `(1 - paramValue)` per
-  // paired suffix. This guarantees the user-rule "only one set of eye
-  // layers shown at a time" holds even when Init Rig was last run BEFORE
-  // the variants were added — the base wouldn't fade out at all without
-  // this override, because the stale keyforms still hold opacity=1.
+  // selectRigSpec.js. Multiplies blended opacity by `(1 - paramValue)`
+  // per paired suffix UNCONDITIONALLY. At Param<Suffix>=1 the base is
+  // guaranteed to land at opacity=0 — the user-rule "only one set of eye
+  // layers shown at a time" is enforced regardless of whether Init Rig
+  // baked the fade into the keyforms.
   //
-  // Backdrop tags (face, ears, hair) are excluded at the source
+  // Skip-if-binding-already-has-it was tried (commit `64fa424`) but the
+  // user reported "still overlays". Two scenarios where the skip-check
+  // hides the bug:
+  //   - Stale rig, fresh selectRigSpec pass: pairedVariantSuffixes is
+  //     correctly detected, BUT mesh.runtime.bindings still lists
+  //     ParamSmile (from the LAST Init Rig that DID see the variant) —
+  //     the keyforms hold opacity=1 at variant=1 because they were
+  //     baked before the user-intent shift. Skip-check then no-ops.
+  //   - Compound 2D grid baked at a moment when the variant's parabola
+  //     fit failed: αV defaults differ silently. The override re-asserts
+  //     the user rule.
+  //
+  // Backdrop tags (face, ears, hair) are excluded at the SOURCE
   // (`_resolvePairedVariantSuffixes` returns []) so face stays at
   // opacity=1 with face.smile layering on top, per the user rule.
   //
-  // Already-correct keyforms (post-fresh Init Rig with the compound 2D
-  // grid for eye base, or the 1D hasBaseFadeOnly fade for mouth/eyebrow
-  // base) get a no-op here: the bindings include Param<Suffix> and the
-  // skip-check short-circuits before multiplying.
+  // Double-apply note: when keyforms ALREADY encode opacity 1→0 on
+  // Param<Suffix>, the override produces a slightly faster-than-linear
+  // fade at midpoint (e.g. variant=0.5 → 0.5 × 0.5 = 0.25 instead of
+  // 0.5). Variant set starts at opacity 0.5 at the same midpoint and
+  // ramps fully visible by variant=1, so the visual "handoff" still
+  // reads as a smooth cross — the user's stated goal is correctness at
+  // the endpoint, not equal-perceived-luminance at the midpoint.
   if (rigMesh && Array.isArray(rigMesh.pairedVariantSuffixes)
       && rigMesh.pairedVariantSuffixes.length > 0) {
-    /** @type {Set<string>} */
-    const bindingParamIds = new Set();
-    for (const b of bindings) if (b?.parameterId) bindingParamIds.add(b.parameterId);
     let multiplier = 1;
     for (const sfx of rigMesh.pairedVariantSuffixes) {
       const paramId = `Param${sfx.charAt(0).toUpperCase()}${sfx.slice(1)}`;
-      if (bindingParamIds.has(paramId)) continue;   // keyforms already encode the fade
       const v = paramValues[paramId];
       if (typeof v !== 'number' || !Number.isFinite(v)) continue;
-      // Clamp to [0,1] — the param's authored range is 0..1 but a stray
-      // driver could push it past, and a negative multiplier flips alpha.
+      // Clamp to [0,1] — the authored range is 0..1 but a stray driver
+      // could push it past, and a negative multiplier flips alpha.
       const clamped = v < 0 ? 0 : v > 1 ? 1 : v;
       multiplier *= (1 - clamped);
       if (multiplier <= 0) { multiplier = 0; break; }
