@@ -95,21 +95,10 @@ expect('different seed → different keyframes', () => {
   assert.ok(differs, 'different seeds produced identical motion');
 });
 
-// Regression — wander shiftToRest must shift bezier handles WITH the value.
-// Before 2026-06-09 the offset was only applied to kf.value; the handles
-// kept their pre-shift absolute (time, value) coordinates, so the bezier
-// between every pair of keyforms overshot by the shift magnitude. With
-// the post-2026-06-09 handleType:free/free preservation that turned into
-// a parkinsonian high-frequency oscillation on every wander param (head
-// angles, eyeball drift) — visible in the F-curve panel and in exported
-// motion3.json playback.
-//
-// Pin: for the calm/seed=1 idle preset's ParamAngleX:
-//   - kfs[0].value must be 0 (defaultRest)
-//   - handleLeft.value and handleRight.value must be CLOSE to kfs[0].value
-//     (within the wander's max handle offset). Pre-fix they were ~6-9
-//     units away from the kf value while the kf was at 0.
-expect('wander shiftToRest also shifts bezier handles', () => {
+// Regression — wander shiftToRest must pin kf[0].value to defaultRest.
+// Now linear (post 2026-06-09 R7) so handle-shift assertions no longer
+// apply, but the value-pin invariant still does.
+expect('wander shiftToRest pins kf[0] to defaultRest', () => {
   const result = buildMotion3({
     preset: 'idle', paramIds: STANDARD_PARAMS,
     physicsOutputIds: new Set(),
@@ -117,17 +106,11 @@ expect('wander shiftToRest also shifts bezier handles', () => {
   });
   const kfs = result.paramKeyframes.get('ParamAngleX');
   assert.ok(kfs && kfs.length >= 2, 'ParamAngleX has keyforms');
-  const kf0 = kfs[0];
-  // shiftToRest pins kf[0].value to defaultRest (=0 for ParamAngleX).
-  assert.ok(Math.abs(kf0.value - 0) < 1e-6,
-    `kfs[0].value should be 0 (defaultRest), got ${kf0.value}`);
-  // Handles should be CLOSE to kf value (within the analytical handle
-  // offset for a 3-harmonic wander; pre-fix they were ~7-9 units off).
-  const HANDLE_BOUND = 3; // generous — analytical max is ~1.7 for this config
-  assert.ok(Math.abs(kf0.handleLeft.value - kf0.value) < HANDLE_BOUND,
-    `kfs[0].handleLeft.value (${kf0.handleLeft.value}) too far from kf.value (${kf0.value}) — shiftToRest didn't shift handles`);
-  assert.ok(Math.abs(kf0.handleRight.value - kf0.value) < HANDLE_BOUND,
-    `kfs[0].handleRight.value (${kf0.handleRight.value}) too far from kf.value (${kf0.value}) — shiftToRest didn't shift handles`);
+  assert.ok(Math.abs(kfs[0].value - 0) < 1e-6,
+    `kfs[0].value should be 0 (defaultRest), got ${kfs[0].value}`);
+  // Linear segments — no handle objects.
+  assert.strictEqual(kfs[0].interpolation, 'linear',
+    `kfs[0].interpolation should be 'linear' post-R7, got ${kfs[0].interpolation}`);
 });
 
 // Regression — amplitude clamp + handle clamp eliminate the

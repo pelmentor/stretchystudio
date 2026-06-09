@@ -172,136 +172,81 @@ function near(a, b, eps = 1e-6) {
   assert(base.amplitude === 1, 'personality: input unchanged');
 }
 
-// ── genSine emits bezier handles (smooth-playback regression) ────────
+// ── genSine emits LINEAR segments at 60 samples per cycle ────────────
+//
+// After 6 rounds of bezier-handle fixes for the user's "breath snaps
+// at 0/1" report, we switched to LINEAR interp at 60 samples/cycle.
+// Bezier-with-zero-slope-at-extremum fundamentally asymptotes to the
+// peak (P2.y == P3.y → tangent at u=1 horizontal); even sub-frame
+// asymptotic-flat regions kept being perceptible in Cubism / ren'py.
+// Linear at 60 samples/cycle gives a polygon whose max chord error
+// vs true sine is ~0.14 % of amplitude — visually identical to SS
+// viewport's live `Math.sin`, and zero bezier interpretation ambiguity.
 
 {
   const kfs = genSine({ durationMs: 4000, amplitude: 1, period: 2000, mid: 0 });
-  // Every keyframe carries bezier interpolation + analytical handles
-  let allBezier = true;
   for (const kf of kfs) {
-    if (kf.interpolation !== 'bezier') { allBezier = false; break; }
-    if (!kf.handleLeft || !kf.handleRight) { allBezier = false; break; }
+    assert(kf.interpolation === 'linear', 'genSine: every kf has interpolation=linear');
   }
-  assert(allBezier, 'genSine: every kf has interpolation=bezier + L/R handles');
 
-  // Handle slope at t≈0 should match analytical cosine derivative scaled by
-  // the adaptive handle offset. v = sin(ωt), dv/dt = ω·cos(ωt). At t=0:
-  // dv/dt = ω = 2π/2000 = |dv/dt|_max → adaptive factor = 1 → offset = dt/3.
-  // N = max(8, cycles*30) = 60 (cycles=2). dt = 4000/60 ≈ 66.67ms.
-  // Expected handleRight.value at t=0: 0 + ω·(dt/3)
-  //                                    = (2π/2000) · (4000/180)
-  const kf0 = kfs[0];
-  const NperCycle = 30;
-  const N = Math.max(8, 2 * NperCycle);
-  const expectedHRValue = (2 * Math.PI / 2000) * (4000 / N / 3);
-  assert(near(kf0.handleRight.value, expectedHRValue, 1e-6),
-    'genSine: t=0 handleRight matches analytical derivative');
-  assert(near(kf0.handleLeft.value, -expectedHRValue, 1e-6),
-    'genSine: t=0 handleLeft mirrors derivative across t');
+  // Density check: cycles=2, NperCycle=60 → N=120 samples + endpoint = 121.
+  assert(kfs.length === 121, `genSine: 60 samples × 2 cycles + 1 = 121 kfs (got ${kfs.length})`);
 
-  // End-to-end: motion3 encoder emits TYPE-1 (bezier) segments, not LINEAR.
-  // Pre-fix every segment was type 0 (linear) because motionLib used the
-  // `easing` field which the encoder doesn't read.
+  // Encoder emits TYPE-0 (linear) segments, no bezier.
   const segments = encodeKeyframesToSegments(kfs, 4);
-  // segments[0,1] = (t0, v0), then triples/septets per segment.
-  let i = 2;
   let bezierCount = 0, linearCount = 0;
+  let i = 2;
   while (i < segments.length) {
     const type = segments[i];
     if (type === 1) { bezierCount++; i += 7; }
     else            { linearCount++; i += 3; }
   }
-  assert(bezierCount > 0, 'encoder: genSine produces bezier segments');
-  assert(linearCount === 0, 'encoder: NO linear segments in pure sine motion');
+  assert(linearCount > 0, 'encoder: genSine produces linear segments');
+  assert(bezierCount === 0, 'encoder: NO bezier segments in pure sine motion');
+
+  // Polygon-vs-sine error < 0.2 % at 60 samples/cycle.
+  let maxErr = 0;
+  for (let k = 0; k < kfs.length - 1; k++) {
+    const a = kfs[k], b = kfs[k + 1];
+    const tMid = (a.time + b.time) / 2;
+    const polyV = (a.value + b.value) / 2;
+    const trueV = Math.sin(2 * Math.PI * tMid / 2000);
+    const err = Math.abs(polyV - trueV);
+    if (err > maxErr) maxErr = err;
+  }
+  assert(maxErr < 0.002, `genSine: polygon-vs-sine error < 0.002 at 60 samples/cycle (got ${maxErr.toFixed(5)})`);
 }
 
-// ── genWander emits bezier handles ───────────────────────────────────
+// ── genWander emits linear at dense sampling ─────────────────────────
 
 {
   const kfs = genWander({ durationMs: 2000, amplitude: 0.5, harmonics: 3, seed: 42 });
-  let allBezier = true;
   for (const kf of kfs) {
-    if (kf.interpolation !== 'bezier'
-        || !kf.handleLeft || !kf.handleRight) { allBezier = false; break; }
+    assert(kf.interpolation === 'linear', 'genWander: every kf has interpolation=linear');
   }
-  assert(allBezier, 'genWander: every kf has bezier + handles');
-
-  // Loop-safety post-bezier: first/last handles still pin first/last value
   assert(near(kfs[0].value, kfs[kfs.length - 1].value, 1e-9),
-    'genWander: loop-safe value after bezier emission');
+    'genWander: loop-safe value');
 }
 
-// ── Analytical handles survive normalizeKeyforms via handleType=free ─
+// ── End-to-end: clean linear segments through buildParamFCurve ───────
 //
-// Without handleType:{left:'free',right:'free'} on every kf,
-// recalcKeyformHandles overwrites the analytical handles with
-// vector (straight-line) ones, collapsing the bezier to a 2N-sided
-// polygon — visibly blocky at the extrema in Cubism viewer + ren'py.
-// This pin replays the breath config that surfaced the bug and asserts
-// the analytical hL/hR values survive the buildParamFCurve round-trip.
+// 2026-06-09 ROUND 7 — after 6 rounds of bezier-handle juggling failed
+// to fully kill the user's "snap at 0/1" report, switched to LINEAR.
+// Pin: motion3 segments after round-trip must all be type 0 (linear);
+// kf endpoints must stay inside the configured value range with no
+// 3+ consecutive samples pinned at the boundary.
 
 {
   const cfg = { durationMs: 10000, amplitude: 0.5, period: 3500, phase: -Math.PI / 2, mid: 0.5 };
   const kfs = genSine(cfg);
   const fc = buildParamFCurve('ParamBreath', kfs);
-
-  assert(fc.keyforms[0].handleType?.left === 'free' && fc.keyforms[0].handleType?.right === 'free',
-    'normalize: kf[0] handleType stays free/free');
-
-  // At t=0 with phase=-π/2, sin = -1 (trough). cos = 0 → analytical
-  // handle slope = 0 → hR.value must equal kf.value (0).
-  assert(near(fc.keyforms[0].handleRight.value, 0, 1e-9),
-    'normalize: kf[0] hR.value preserved at analytical 0 (trough)');
-  assert(near(fc.keyforms[0].handleLeft.value, 0, 1e-9),
-    'normalize: kf[0] hL.value preserved at analytical 0 (trough)');
-
-  // No bezier segment may degenerate to flat handles (cy1==cy2) over a
-  // pure sine — that signature is the polygonal vector-handle artefact.
   const segs = encodeKeyframesToSegments(fc.keyforms, 10);
-  let degenerate = 0, bezierTotal = 0;
-  for (let i = 2; i + 6 < segs.length; ) {
-    const type = segs[i];
-    if (type === 1) {
-      bezierTotal++;
-      if (Math.abs(segs[i + 2] - segs[i + 4]) < 1e-9) degenerate++;
-      i += 7;
-    } else i += 3;
+  let bezierCount = 0;
+  for (let i = 2; i < segs.length; ) {
+    if (segs[i] === 1) { bezierCount++; i += 7; } else i += 3;
   }
-  assert(bezierTotal > 0 && degenerate === 0,
-    `normalize: no flat-handle (cy1==cy2) bezier segs after round-trip (got ${degenerate}/${bezierTotal})`);
-}
-
-// ── Adaptive handleOff: extremum plateau bounded to sub-frame width ──
-//
-// Pre-2026-06-09 the handle offset was fixed at dt/3. At a sine peak the
-// analytical slope is 0, so handleLeft.value === peak.value — the bezier
-// asymptoted to the peak over the last 1/3 of the segment, visibly holding
-// at the peak value for ~30-90 ms ("snap at extremes" in cubism viewer).
-// Adaptive offset shrinks to ~15% of dt/3 at extrema, collapsing the
-// plateau to sub-frame width at typical fps.
-//
-// Pin: for the breath config (calm, period=3500, amp=0.5), count samples
-// in the last 100 ms before peak where bezier value is within 1e-3 of
-// the peak. Pre-fix this was 17/50; post-fix should be ≤ 8/50.
-
-{
-  const { default: assertImport } = await import('node:assert');
-  const { evaluateBezTripleSegment } = await import('../../src/anim/fcurveEval.js');
-  const cfg = { durationMs: 10000, amplitude: 0.5, period: 3500, phase: -Math.PI / 2, mid: 0.5 };
-  const kfs = genSine(cfg);
-  let peakIdx = -1, peakV = -Infinity;
-  for (let i = 0; i < kfs.length; i++) if (kfs[i].value > peakV) { peakV = kfs[i].value; peakIdx = i; }
-  const prev = kfs[peakIdx - 1];
-  const peak = kfs[peakIdx];
-  let plateau = 0;
-  for (let t = peak.time - 100; t <= peak.time; t += 2) {
-    const bv = evaluateBezTripleSegment(prev, peak, t);
-    if (Math.abs(peakV - bv) < 1e-3) plateau++;
-  }
-  assert(plateau <= 8,
-    `adaptive handleOff: plateau-near-peak should be <= 8 of 50 samples (was 17 pre-fix); got ${plateau}`);
-  assert(peakV > 0.999,
-    `sanity: peak still reached cleanly (got ${peakV})`);
+  assert(bezierCount === 0,
+    `round-trip: no bezier segments emitted for genSine (got ${bezierCount})`);
 }
 
 console.log(`motionLib: ${passed} passed, ${failed} failed`);

@@ -599,6 +599,18 @@ export async function exportLive2DProject(project, images, opts = {}) {
       rigWarps: rigWarpsResolved,
     }));
 
+  // Build the parameter spec once — needed by both motionPresets
+  // synthesis (paramIds for buildMotion3) AND generateCan3 (per-curve
+  // ranges so fcurve-only paths don't fall back to the hardcoded -1..1
+  // default). Same builder/inputs as the cmo3 writer just consumed
+  // internally, so the two stay in lockstep.
+  const paramSpec = buildParameterSpec({
+    baseParameters: project.parameters ?? [],
+    meshes,
+    groups,
+    generateRig,
+  });
+
   // --- Motion synthesis (optional) ---
   // Each requested preset becomes a parameter-fcurve SS action appended to
   // `actions`. Flowing through generateCan3 emits a .can3 scene with bezier
@@ -611,15 +623,7 @@ export async function exportLive2DProject(project, images, opts = {}) {
   // Presets currently available: idle, listening, talkingIdle, embarrassedHold.
   let actions = project.actions ?? [];
   if (Array.isArray(motionPresets) && motionPresets.length > 0) {
-    // Use the same paramSpec the cmo3 writer just built — `project.parameters`
-    // is empty for fresh PSD imports, so motion presets used to silently skip
-    // every preset (no params to target).
-    const paramIds = buildParameterSpec({
-      baseParameters: project.parameters ?? [],
-      meshes,
-      groups,
-      generateRig,
-    }).map(p => p.id);
+    const paramIds = paramSpec.map(p => p.id);
     for (const entry of motionPresets) {
       // Normalise both shapes: bare string OR object with overrides.
       const cfg = typeof entry === 'string' ? { preset: entry } : (entry ?? {});
