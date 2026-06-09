@@ -29,7 +29,7 @@ import * as SelectImpl from '../../../components/ui/select.jsx';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useUIV3Store } from '../../../store/uiV3Store.js';
 import { useAnimationStore } from '../../../store/animationStore.js';
-import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS } from '../../../io/live2d/idle/builder.js';
+import { buildMotion3, PRESETS, PRESET_NAMES, PERSONALITY_PRESETS, makeLoopingCyclesModifier } from '../../../io/live2d/idle/builder.js';
 import { buildParamFCurve } from '../../../anim/animationFCurve.js';
 import { sanitizeName } from '../../../io/live2d/exporter.js';
 import { uniqueName } from '../../../lib/uniqueName.js';
@@ -138,7 +138,15 @@ export function IdleMotionDialog({ open, onOpenChange }) {
         const kfs = result.paramKeyframes.get(id);
         if (!kfs || kfs.length < 2) continue;
         const fc = buildParamFCurve(id, kfs);
-        if (fc) fcurves.push(fc);
+        if (fc) {
+          // Mark loop-safe so the motion3.json exporter emits Meta.Loop:true
+          // (`actionHasUniformLoopingCycles` requires every fcurve to carry
+          // a uniform-looping Cycles modifier). Without this, Cubism plays
+          // the motion one-shot and the player has to restart between
+          // cycles — visible as a discontinuity at the wrap.
+          fc.modifiers = [makeLoopingCyclesModifier()];
+          fcurves.push(fc);
+        }
       }
 
       // Create the action, then update its fcurves via the store. Two-step

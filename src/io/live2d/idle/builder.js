@@ -24,6 +24,27 @@ import { buildParamFCurve } from '../../../anim/animationFCurve.js';
 export { PERSONALITY_PRESETS, PRESET_NAMES, PRESETS, isImplicitlySkipped };
 
 /**
+ * Build a fresh head-of-stack Cycles modifier that signals "this fcurve
+ * loops seamlessly end→start". The motion3.json exporter scans for this
+ * (`actionHasUniformLoopingCycles`) and emits `Meta.Loop: true` when
+ * every fcurve carries an uniform-looping cycles modifier — without it
+ * Cubism / ren'py play the motion one-shot and the player must restart
+ * each cycle, introducing a visible discontinuity at the wrap.
+ *
+ * Returns a fresh object each call so consumers can mutate it (e.g.
+ * disable/enable) without affecting other fcurves.
+ */
+export function makeLoopingCyclesModifier() {
+  return {
+    type: 'cycles',
+    data: { before: 'none', after: 'repeat', afterCycles: 0 },
+    muted: false,
+    disabled: false,
+    useRestrictedRange: false,
+  };
+}
+
+/**
  * @typedef {Object} BuildMotionOpts
  * @property {string}         [preset='idle']    - One of PRESET_NAMES
  * @property {string[]}       paramIds            - Available parameter IDs in the target model (from cdi3)
@@ -67,7 +88,15 @@ function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
     const mid = cfg.mid ?? (def.kind === 'wander' ? def.defaultRest : 0);
     const maxRoom = def.defaultMax - mid;
     const minRoom = mid - def.defaultMin;
-    const maxAmp = Math.max(0, Math.min(maxRoom, minRoom));
+    // Safety margin (0.5 % of range either side) so peaks/troughs never
+    // land EXACTLY on the param boundary. With amp == maxRoom the sine
+    // touches the boundary at one sample per cycle; Cubism's runtime
+    // can clamp tiny FP excursions at that boundary (1.000001 → 1.0)
+    // which creates a brief plateau visible as a snap. The 0.5 % cap is
+    // imperceptible amplitude-wise but lifts the peak off the boundary.
+    const range = Math.max(0, def.defaultMax - def.defaultMin);
+    const SAFETY_MARGIN = range * 0.005;
+    const maxAmp = Math.max(0, Math.min(maxRoom, minRoom) - SAFETY_MARGIN);
     if (cfg.amplitude > maxAmp) cfg.amplitude = maxAmp;
   }
 
@@ -366,26 +395,11 @@ export function resultToSsAction(result, opts = {}) {
     fps = result.motion3.Meta.Fps ?? 30,
   } = opts;
 
-  // Attach a head-of-stack Cycles modifier to every fcurve so the
-  // motion3.json exporter detects this as a UNIFORM LOOPING action
-  // (`actionHasUniformLoopingCycles`) and emits `Meta.Loop: true`.
-  // Without it Cubism/ren'py don't auto-loop the motion — the player
-  // must restart on each cycle and the restart introduces a visible
-  // discontinuity at the wrap. Idle motions are loop-safe by
-  // construction (loop-pin on every generator), so unconditionally
-  // marking the action as looping matches authoring intent.
-  const cyclesModifier = {
-    type: 'cycles',
-    data: { before: 'none', after: 'repeat', afterCycles: 0 },
-    muted: false,
-    disabled: false,
-    useRestrictedRange: false,
-  };
   const fcurves = [];
   for (const [paramId, kfs] of result.paramKeyframes) {
     const fc = buildParamFCurve(paramId, kfs);
     if (fc) {
-      fc.modifiers = [cyclesModifier];
+      fc.modifiers = [makeLoopingCyclesModifier()];
       fcurves.push(fc);
     }
   }
