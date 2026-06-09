@@ -87,16 +87,20 @@ const CurveIcon = ({ type, className = '' }) => {
    covers Stage 1.E scene-binding changes — the user binding a different
    action to `__scene__` flips animation.id and restarts audio cleanly.
 ────────────────────────────────────────────────────────────────────────── */
-function useAudioSync(animation, animStore) {
+// Caller passes the FIELDS it has subscribed to — was previously taking
+// the whole `animStore` (post-perf-refactor TimelineEditor no longer
+// subscribes to the whole store, so the bare `animStore` reference
+// became undefined). `isPlaying` + `loopCount` drive the play/stop
+// effect; `currentTime` is read lazily via getState() when audio
+// actually starts so it doesn't need to be a dep.
+function useAudioSync(animation, isPlaying, loopCount) {
   const audioCtxRef    = useRef(null);
   const buffersRef     = useRef(new Map()); // trackId → AudioBuffer
   const sourcesRef     = useRef(new Map()); // trackId → active AudioBufferSourceNode
   const animationRef   = useRef(animation); // always-fresh animation, not a reactive dep
-  const currentTimeRef = useRef(animStore.currentTime); // always-fresh time, not a reactive dep
 
   // Update refs every render so effects always read the latest values
   animationRef.current   = animation;
-  currentTimeRef.current = animStore.currentTime;
 
   // MEM-02 — mount-once cleanup. Pre-fix each TimelineEditor unmount
   // leaked one AudioContext (browsers cap at ~6 concurrent before
@@ -180,7 +184,7 @@ function useAudioSync(animation, animStore) {
   //    animation object intentionally NOT in deps (object ref changes every frame
   //    during drags/updates and would cause runaway restarts). Read via ref instead.
   useEffect(() => {
-    if (!animStore.isPlaying) {
+    if (!isPlaying) {
       stopAll();
       return;
     }
@@ -195,7 +199,9 @@ function useAudioSync(animation, animStore) {
       if (ctx.state === 'suspended') await ctx.resume();
       stopAll();
 
-      const nowMs = currentTimeRef.current;
+      // Read currentTime lazily here (when play actually starts) so
+      // we don't need to keep a per-render ref subscription.
+      const nowMs = useAnimationStore.getState().currentTime;
 
       for (const track of tracks) {
         if (!track.sourceUrl) continue;
@@ -230,7 +236,7 @@ function useAudioSync(animation, animStore) {
     startAll().catch(e => console.error('Audio startAll error:', e));
     return () => { stopAll(); };
   // loopCount increments in animationStore.tick on each loop — causes audio restart from top
-  }, [animStore.isPlaying, animation?.id, animStore.loopCount, stopAll]); // NOT animation, NOT currentTime
+  }, [isPlaying, animation?.id, loopCount, stopAll]); // NOT animation, NOT currentTime
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -762,6 +768,12 @@ export function TimelineEditor() {
   const animStartFrame  = useAnimationStore((s) => s.startFrame);
   const activeActionId  = useAnimationStore((s) => s.activeActionId);
   const loopKeyframes   = useAnimationStore((s) => s.loopKeyframes);
+  // Audio sync needs to react to play/pause + each loop wrap. These
+  // are infrequent transitions (toggle on Space, ~1/sec at most for
+  // loop), so subscribing here doesn't put us back in the per-tick
+  // re-render hole.
+  const isPlaying       = useAnimationStore((s) => s.isPlaying);
+  const loopCount       = useAnimationStore((s) => s.loopCount);
   // Action functions — zustand returns stable refs across renders so
   // subscribing to them is identity-free; this just lets us call them
   // ergonomically without `useAnimationStore.getState().fn(...)` at
@@ -840,7 +852,7 @@ export function TimelineEditor() {
   }, [activeActionId, animation?.id]);
 
   // Audio sync hook
-  useAudioSync(animation, anim);
+  useAudioSync(animation, isPlaying, loopCount);
 
   /* ── Timeline pixel helpers ─────────────────────────────────────────── */
   // clientX to global frame mapping, respecting zoom
@@ -879,7 +891,7 @@ export function TimelineEditor() {
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
-  }, [xToFrame, anim, startFrame, endFrame]);
+  }, [xToFrame, animSeekFrame, startFrame, endFrame]);
 
   // Keyframe clicking & dragging
   // 2026-04-29: `rowKey` (`node:<id>` | `param:<id>`) replaces the
@@ -1112,7 +1124,7 @@ export function TimelineEditor() {
     };
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
-  }, [animation, startFrame, endFrame, totalFrames, fps, selectedKeyframes, xToFrame, anim]);
+  }, [animation, startFrame, endFrame, totalFrames, fps, selectedKeyframes, xToFrame, animSeekFrame]);
 
   /* ── Clipboard Actions ──────────────────────────────────────────────── */
   // Copy now keyed by rowKey rather than nodeId. Param-row clipboard
