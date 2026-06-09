@@ -111,6 +111,13 @@ const KERNELS = {
  *   `kernelArtMeshEval` so each part's bone-post-chain pass doesn't
  *   re-scan `project.nodes`. Populated on first part eval; reset every
  *   time `evalDepGraph` makes a fresh ctx.
+ * @property {Record<string, number>} [_paramValuesCache] - kernel-private
+ *   per-eval `paramId → currentValue` snapshot computed from
+ *   `project.parameters[i].default` overlaid with `ctx.paramOverrides`.
+ *   Populated lazily by `kernelArtMeshEval`'s first invocation; reused
+ *   by every subsequent part. Shaved per-frame O(parts × params)
+ *   allocation + iteration on heavy rigs (~8k property writes / frame
+ *   on Kora-scale models).
  * @property {Map<string, Float32Array>} [_artMeshBoneWorldCache] -
  *   kernel-private per-eval `boneId → WORLD matrix` cache. Same
  *   lifetime as `_artMeshByIdCache`. Mirrors the per-frame cache the
@@ -201,8 +208,13 @@ export function evalDepGraph(graph, ctxIn) {
   let evaluatedCount = 0;
   /** @type {Set<string>} */
   const failedOpcodes = new Set();
-  while (ready.length > 0) {
-    const op = ready.shift();
+  // Head-pointer dequeue. `Array.shift()` is O(N) per call — for a graph
+  // of ~800 ops that's ~640k array-element shifts per eval, dominating
+  // the eval loop. With a head pointer the dequeue is O(1) and the
+  // queue still grows by push() as downstream ops unlock.
+  let readyHead = 0;
+  while (readyHead < ready.length) {
+    const op = ready[readyHead++];
     if (!op) break;
     const kernel = op.evaluate ?? KERNELS[op.opcode];
     let result;

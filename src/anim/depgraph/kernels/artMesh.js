@@ -86,7 +86,17 @@ export function kernelArtMeshEval(op, ctx) {
   const idNode = op.owner?.owner;
   if (!idNode) return null;
   const partId = idNode.idRef;
-  const part = ctx.project?.nodes?.find((n) => n?.id === partId && n.type === 'part');
+  // Use the per-eval part-by-id cache (also used by the bone post-chain
+  // pass below). Without this, every ART_MESH_EVAL kernel did a linear
+  // `nodes.find` — O(parts × nodes) per frame ≈ 20k comparisons on a
+  // 100-part rig with 200 total nodes.
+  if (!ctx._artMeshByIdCache) {
+    ctx._artMeshByIdCache = new Map();
+    for (const n of ctx.project?.nodes ?? []) {
+      if (n && n.type === 'part' && n.id) ctx._artMeshByIdCache.set(n.id, n);
+    }
+  }
+  const part = ctx._artMeshByIdCache.get(partId);
   if (!part) return null;
 
   // v18 (Object/ObjectData split) routes geometry through `node.dataId`
@@ -583,6 +593,13 @@ function computePerPartRotationCanvasFinal(rotationId, chainAbove, ctx) {
  * @returns {Record<string, number>}
  */
 function collectParamValues(ctx) {
+  // Cache per eval. The output depends only on `ctx.project.parameters`
+  // defaults and `ctx.paramOverrides`, both constant for one eval pass.
+  // Without this cache every ART_MESH_EVAL kernel re-walked ALL params
+  // and re-allocated a fresh `{}` — for 100 parts × 80 params that's
+  // 8000 property writes + 100 fresh objects per frame. This was the
+  // dominant CPU cost during idle animation playback on heavy rigs.
+  if (ctx._paramValuesCache) return ctx._paramValuesCache;
   /** @type {Record<string, number>} */
   const values = {};
   const params = ctx.project?.parameters ?? [];
@@ -595,6 +612,7 @@ function collectParamValues(ctx) {
       if (typeof v === 'number' && Number.isFinite(v)) values[k] = v;
     }
   }
+  ctx._paramValuesCache = values;
   return values;
 }
 

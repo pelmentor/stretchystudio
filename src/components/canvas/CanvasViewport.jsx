@@ -161,6 +161,12 @@ export default function CanvasViewport({
   // m.uvs array identity (WeakMap can't key on plain Arrays, so use a
   // plain Map; GC pressure is bounded by mesh count, not by frames).
   const uvTypedCacheRef = useRef(new Map());
+  // Identity-keyed `nodeId → node` cache. Rebuilds only when
+  // `project.nodes` identity changes (post-edit). Before this cache, the
+  // rAF tick built a fresh Map per frame AND did `nodes.find` linear
+  // scans in the GPU upload loop — ~20k pointer comparisons per frame
+  // on a 100-part rig.
+  const nodesByIdCacheRef = useRef({ nodes: null, map: new Map() });
   // Phase 7.A audit fix G-2 — `meshSignature` hashes vertex COUNT + tri count
   // + UV hash but not vertex XY positions, so an in-place positional shift
   // (e.g. `applySetOrigin` rewriting `mesh.vertices` to compensate for a
@@ -1167,6 +1173,19 @@ export default function CanvasViewport({
         // mix part-local deltas in, so worldMatrix application is the
         // closest-correct behavior; mixed-mode composition is a Phase 0
         // coord-space refactor concern, not -1B scope).
+        // Identity-keyed node-by-id Map. Used by the rigSpec frames loop
+        // below (was rebuilt every frame at line ~1280) AND by the GPU
+        // upload loop further down (which used `nodes.find` linear
+        // scans). One cached map serves both call sites.
+        const _projForNodes = projectRef.current;
+        const _nbiCache = nodesByIdCacheRef.current;
+        if (_nbiCache.nodes !== _projForNodes.nodes) {
+          _nbiCache.nodes = _projForNodes.nodes;
+          _nbiCache.map = new Map();
+          for (const _n of _projForNodes.nodes) _nbiCache.map.set(_n.id, _n);
+        }
+        const nodesById = _nbiCache.map;
+
         const rigDrivenParts = new Set();
         const _rigSpec = rigSpecRef.current;
         if (_rigSpec && Array.isArray(_rigSpec.artMeshes) && _rigSpec.artMeshes.length > 0) {
@@ -1272,12 +1291,10 @@ export default function CanvasViewport({
           // Other parts stay on rig output as usual; only the selected
           // part being edited drops out.
           const _ed_mesh = editorRef.current;
-          // Map of nodes by id, used for the per-frame `node` lookup
-          // below. Replaces a `projectRef.current.nodes.find(...)` per
-          // art mesh per frame (~10k linear comparisons on a 100-part
-          // rig); single Map.get is O(1).
-          const nodesById = new Map();
-          for (const _n of projectRef.current.nodes) nodesById.set(_n.id, _n);
+          // `nodesById` is now hoisted + identity-cached above (see the
+          // `_nbiCache` block at the top of this `if (isDirtyRef...)`
+          // branch). Single shared Map.get is O(1) here and in the GPU
+          // upload loop further down.
           // Force the actively-edited part to render at its REST `mesh.vertices`
           // (camera-only) in BOTH Edit and Weight-Paint modes. WeightPaintOverlay
           // (and the brush hit-test) project rest `mesh.vertices`; without this
@@ -1465,7 +1482,7 @@ export default function CanvasViewport({
             if (!ov.mesh_verts) continue;
             newMeshOverridden.add(nodeId);
             finalVerts.set(nodeId, ov.mesh_verts);
-            const node = projectRef.current.nodes.find(n => n.id === nodeId);
+            const node = nodesById.get(nodeId);
             const m = getMesh(node, projectRef.current);
             if (m) {
               sceneRef.current.parts.uploadPositions(nodeId, ov.mesh_verts, toTypedUVs(m.uvs));
@@ -1475,7 +1492,7 @@ export default function CanvasViewport({
         for (const nodeId of meshOverriddenParts.current) {
           if (!newMeshOverridden.has(nodeId)) {
             // Override removed — restore base mesh from projectStore
-            const node = projectRef.current.nodes.find(n => n.id === nodeId);
+            const node = nodesById.get(nodeId);
             const m = getMesh(node, projectRef.current);
             if (m) {
               sceneRef.current.parts.uploadPositions(nodeId, m.vertices, toTypedUVs(m.uvs));

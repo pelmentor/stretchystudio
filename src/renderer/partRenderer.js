@@ -181,7 +181,17 @@ export class PartRenderer {
     if (!state) return;
 
     const n = vertices.length;
-    const vertexData = new Float32Array(n * 4);
+    const need = n * 4;
+    // Reuse a per-part scratch buffer. uploadPositions is called per part
+    // per frame during animation playback; without the scratch buffer
+    // every call allocated a fresh Float32Array (240KB/frame heap churn
+    // on a 100-part rig). Grow only when the part's vertex count goes
+    // up — rare; usually constant after import.
+    let vertexData = state.vertexScratch;
+    if (!vertexData || vertexData.length < need) {
+      vertexData = new Float32Array(need);
+      state.vertexScratch = vertexData;
+    }
     for (let i = 0; i < n; i++) {
       vertexData[i * 4]     = vertices[i].x;
       vertexData[i * 4 + 1] = vertices[i].y;
@@ -190,7 +200,10 @@ export class PartRenderer {
     }
 
     gl.bindBuffer(gl.ARRAY_BUFFER, state.vbo);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertexData);
+    // Use a subarray view so bufferSubData uploads only the `n*4` floats
+    // actually filled, even when the scratch buffer is larger from a
+    // prior part with more vertices.
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertexData.subarray(0, need));
   }
 
   /**
