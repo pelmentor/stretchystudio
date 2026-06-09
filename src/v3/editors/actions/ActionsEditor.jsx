@@ -230,7 +230,16 @@ export function ActionsEditor() {
 
   function unbindFromScene() {
     if (!sceneExists) return;
+    // Clear scene binding AND the UI-store fallback. Without clearing
+    // `activeActionId`, `getActiveSceneAction` (which Timeline/Dopesheet/
+    // playback all consult) would fall through to the UI-store id and
+    // the just-unbound action would keep playing — exactly the bug the
+    // user reported ("unbind doesn't work properly, it's always binding
+    // to any animation motion"). Mirrors PlaybackControls.unbindAction.
     unassignAction('__scene__');
+    const a = useAnimationStore.getState();
+    a.setActiveActionId(null);
+    a.stop();
   }
 
   return (

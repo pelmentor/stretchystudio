@@ -1241,14 +1241,25 @@ export function TimelineEditor() {
     return () => window.removeEventListener('keydown', onKey, { capture: true });
   }, [animStartFrame, animEndFrame]);
 
-  /* ── Auto-select action when one exists ──────────────────────────────── */
-  // Stage 1.E: only auto-select when neither scene-binding nor UI-store
-  // resolves an action. If the scene is already bound, that wins — no
-  // need to write the UI store too (its purpose is the fallback when no
-  // scene binding exists).
+  /* ── Auto-select action — ONCE per mount only ────────────────────────── */
+  // Pre-fix: this effect had `[proj.actions, animation]` deps. After the
+  // user explicitly unbound the scene action (X button in Actions panel
+  // or Unbind in PlaybackControls), `animation` flipped to null, the
+  // effect re-fired, re-selected `proj.actions[0]`, and the just-unbound
+  // action was bound right back. User-visible symptom: "unbind doesn't
+  // work properly, it's always binding to any animation motion."
+  //
+  // Auto-select is intended for FIRST-LOAD UX only — a project with
+  // existing actions but no scene binding + no UI selection should land
+  // the user in a usable timeline. After that initial pick, user
+  // intent (manual switch / explicit unbind) wins. The `mountAutoPickedRef`
+  // latch ensures the auto-pick fires AT MOST ONCE per editor mount.
+  const mountAutoPickedRef = useRef(false);
   useEffect(() => {
-    if (animation) return;
+    if (mountAutoPickedRef.current) return;
+    if (animation) { mountAutoPickedRef.current = true; return; }
     if (proj.actions.length === 0) return;
+    mountAutoPickedRef.current = true;
     animSetActiveActionId(proj.actions[0].id);
     const a = proj.actions[0];
     animSetFps(a.fps ?? 24);
