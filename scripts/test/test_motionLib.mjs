@@ -16,6 +16,7 @@ import {
   applyPersonality,
 } from '../../src/io/live2d/idle/motionLib.js';
 import { encodeKeyframesToSegments } from '../../src/io/live2d/motion3json.js';
+import { buildParamFCurve } from '../../src/anim/animationFCurve.js';
 
 let passed = 0;
 let failed = 0;
@@ -227,6 +228,46 @@ function near(a, b, eps = 1e-6) {
   // Loop-safety post-bezier: first/last handles still pin first/last value
   assert(near(kfs[0].value, kfs[kfs.length - 1].value, 1e-9),
     'genWander: loop-safe value after bezier emission');
+}
+
+// ── Analytical handles survive normalizeKeyforms via handleType=free ─
+//
+// Without handleType:{left:'free',right:'free'} on every kf,
+// recalcKeyformHandles overwrites the analytical handles with
+// vector (straight-line) ones, collapsing the bezier to a 2N-sided
+// polygon — visibly blocky at the extrema in Cubism viewer + ren'py.
+// This pin replays the breath config that surfaced the bug and asserts
+// the analytical hL/hR values survive the buildParamFCurve round-trip.
+
+{
+  const cfg = { durationMs: 10000, amplitude: 0.5, period: 3500, phase: -Math.PI / 2, mid: 0.5 };
+  const kfs = genSine(cfg);
+  const fc = buildParamFCurve('ParamBreath', kfs);
+
+  assert(fc.keyforms[0].handleType?.left === 'free' && fc.keyforms[0].handleType?.right === 'free',
+    'normalize: kf[0] handleType stays free/free');
+
+  // At t=0 with phase=-π/2, sin = -1 (trough). cos = 0 → analytical
+  // handle slope = 0 → hR.value must equal kf.value (0).
+  assert(near(fc.keyforms[0].handleRight.value, 0, 1e-9),
+    'normalize: kf[0] hR.value preserved at analytical 0 (trough)');
+  assert(near(fc.keyforms[0].handleLeft.value, 0, 1e-9),
+    'normalize: kf[0] hL.value preserved at analytical 0 (trough)');
+
+  // No bezier segment may degenerate to flat handles (cy1==cy2) over a
+  // pure sine — that signature is the polygonal vector-handle artefact.
+  const segs = encodeKeyframesToSegments(fc.keyforms, 10);
+  let degenerate = 0, bezierTotal = 0;
+  for (let i = 2; i + 6 < segs.length; ) {
+    const type = segs[i];
+    if (type === 1) {
+      bezierTotal++;
+      if (Math.abs(segs[i + 2] - segs[i + 4]) < 1e-9) degenerate++;
+      i += 7;
+    } else i += 3;
+  }
+  assert(bezierTotal > 0 && degenerate === 0,
+    `normalize: no flat-handle (cy1==cy2) bezier segs after round-trip (got ${degenerate}/${bezierTotal})`);
 }
 
 console.log(`motionLib: ${passed} passed, ${failed} failed`);

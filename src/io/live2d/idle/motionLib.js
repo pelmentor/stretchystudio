@@ -66,6 +66,13 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
   const N = samples > 0 ? samples : Math.max(8, cycles * 12);
   const dt = D / N;
   const handleOff = dt / 3;
+  // `handleType: free/free` is load-bearing: without it `normalizeKeyforms`
+  // runs `recalcKeyformHandles` which OVERWRITES our analytical handles
+  // with vector (straight-line) ones, collapsing the bezier to a 2N-sided
+  // polygon. The polygon plays smoothly mid-arc but visibly chords through
+  // the extrema where sine curvature is highest — exactly the "blocky at
+  // 0 and 1" symptom that comes back from the cubism viewer + ren'py.
+  const handleType = { left: 'free', right: 'free' };
   const kfs = [];
   for (let i = 0; i <= N; i++) {
     const t = i * dt;
@@ -75,13 +82,11 @@ export function genSine({ durationMs, amplitude, period, phase = 0, mid = 0, sam
       time: t,
       value: v,
       interpolation: 'bezier',
+      handleType,
       handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
       handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
     });
   }
-  // Loop-safety: pin the last keyframe's value (and its left handle) to the
-  // first. Periodicity already guarantees identity to fp32 precision, but
-  // explicit pin removes any rounding drift across cycles*N samples.
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
   last.value = first.value;
@@ -120,6 +125,9 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
   // wander instead of a 24-sided polygon.
   const dt = D / samples;
   const handleOff = dt / 3;
+  // See genSine — `free/free` keeps `recalcKeyformHandles` from clobbering
+  // our analytical handles with vector ones.
+  const handleType = { left: 'free', right: 'free' };
   const kfs = [];
   for (let i = 0; i <= samples; i++) {
     const t = i * dt;
@@ -135,6 +143,7 @@ export function genWander({ durationMs, amplitude, harmonics = 3, mid = 0, sampl
       time: t,
       value: v,
       interpolation: 'bezier',
+      handleType,
       handleLeft:  { time: t - handleOff, value: v - dvdt * handleOff },
       handleRight: { time: t + handleOff, value: v + dvdt * handleOff },
     });
