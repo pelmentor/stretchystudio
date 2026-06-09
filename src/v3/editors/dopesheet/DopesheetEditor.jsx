@@ -178,6 +178,23 @@ export function DopesheetEditor() {
   // events. The default is a defensive value, not a runtime path.
   const duration = Math.max(1, action?.duration ?? 1000);
 
+  // View bounds (Blender V2D parity). Independent of the action's
+  // playable duration — MMB-pan + Ctrl/Shift+wheel mutate, Home resets.
+  // Defaults to [0, duration] + tracks `duration` changes until the
+  // user manually pans/zooms (viewDirtyRef latches true). viewStart MAY
+  // be negative — Blender shows + lets you pan to negative-frame kfs.
+  const [viewBounds, setViewBounds] = useState(() => ({ start: 0, end: Math.max(1, duration) }));
+  const viewBoundsRef = useRef(viewBounds);
+  useEffect(() => { viewBoundsRef.current = viewBounds; }, [viewBounds]);
+  const viewDirtyRef = useRef(false);
+  useEffect(() => {
+    if (viewDirtyRef.current) return;
+    setViewBounds({ start: 0, end: Math.max(1, duration) });
+  }, [duration]);
+  const viewStartMs = viewBounds.start;
+  const viewEndMs = viewBounds.end;
+  const viewSpanMs = Math.max(1, viewEndMs - viewStartMs);
+
   // Slice 5.EE — subscribe to keyform-selection store. Slice 6.A
   // promoted DopesheetEditor from READER to WRITER (tick clicks now
   // mutate the shared store via dopesheetSelectOps); the
@@ -346,9 +363,45 @@ export function DopesheetEditor() {
   //     BKEY path which doesn't have the tweak check.)
   //   - pointerType is not 'mouse' (touch/pen — keep simple for 6.B;
   //     Slice 6.C will reconsider for modal grab)
+  // MMB-pan helper (Blender V2D parity). Routes from both the ruler's
+  // outer click capture AND the track area's pointerdown so MMB anywhere
+  // over the dopesheet pans the view. Flips viewDirtyRef so anim-bound
+  // sync stops fighting the user's pan.
+  const startMmbPan = useCallback((e) => {
+    const trackArea = trackAreaRef.current;
+    if (!trackArea) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = trackArea.getBoundingClientRect();
+    const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
+    const startView = viewBoundsRef.current;
+    const span = Math.max(1, startView.end - startView.start);
+    const msPerPx = span / tickAreaWidth;
+    const startX = e.clientX;
+    viewDirtyRef.current = true;
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX;
+      const msDelta = -dx * msPerPx;
+      setViewBounds({
+        start: startView.start + msDelta,
+        end: startView.end + msDelta,
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
   const handleTrackPointerDown = useCallback(
     /** @param {React.PointerEvent<HTMLDivElement>} e */
     (e) => {
+      // MMB anywhere pans the view (intercept BEFORE the grab-active /
+      // LMB checks so MMB pan works mid-grab if needed, though we still
+      // suppress when grab is active to keep that gesture authoritative).
+      if (e.button === 1 && !grabActiveRef.current) { startMmbPan(e); return; }
       // Slice 6.C — during a modal grab, the window-level mousedown
       // listener (capture phase) handles commit/cancel; this handler
       // should not start a box-select. Suppress here to keep the
@@ -376,7 +429,7 @@ export function DopesheetEditor() {
       // on it even if the cursor leaves the element bounds.
       try { trackArea.setPointerCapture(e.pointerId); } catch { /* noop */ }
     },
-    [bArmed],
+    [bArmed, startMmbPan],
   );
 
   // Pointermove during drag — update the rect's current corner. Below
@@ -455,7 +508,8 @@ export function DopesheetEditor() {
         return;
       }
       const curRows = rowsRef.current;
-      const curDuration = durationRef.current;
+      const view = viewBoundsRef.current;
+      const curViewSpan = Math.max(1, view.end - view.start);
       // Compute Y-intersected rows via DOM row bounding boxes. Each
       // row's data-row-idx attribute lets us index back into `rows`.
       const trackRect = trackArea.getBoundingClientRect();
@@ -478,12 +532,13 @@ export function DopesheetEditor() {
         if (!row || !row.fcurveId) continue;
         hitRows.push({ fcurveId: row.fcurveId, keyforms: row.keyforms });
       }
-      // Convert track-area-local X to time. Track area's full width =
-      // `duration` ms. The Row's tick area starts after the LABEL_W
-      // column, so subtract LABEL_W first.
+      // Convert track-area-local X → time using current VIEW bounds, not
+      // the action's duration. Tick area spans `[viewStart, viewEnd]`
+      // pixel-linearly; subtract LABEL_W to land in the tick area's
+      // local frame.
       const tickAreaWidth = Math.max(1, trackRect.width - LABEL_W);
       const xToTime = (/** @type {number} */ x) =>
-        ((x - LABEL_W) / tickAreaWidth) * curDuration;
+        view.start + ((x - LABEL_W) / tickAreaWidth) * curViewSpan;
       const tMin = xToTime(Math.min(drag.startX, drag.curX));
       const tMax = xToTime(Math.max(drag.startX, drag.curX));
       const hits = computeBoxHits(hitRows, tMin, tMax);
@@ -634,9 +689,13 @@ export function DopesheetEditor() {
         : rect.left + rect.width / 2
     );
     const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
+    // Grab-modal cursor-X → ms conversion uses the CURRENT view span
+    // (not the action's total duration), so the pixel-per-ms ratio
+    // matches what the user sees in the zoomed/panned dopesheet.
+    const view = viewBoundsRef.current;
     tickAreaScaleRef.current = {
       tickAreaWidth,
-      duration: durationRef.current,
+      duration: Math.max(1, view.end - view.start),
     };
     setGrabState({ startClientX, deltaMs: 0 });
   }, []);
@@ -1166,6 +1225,61 @@ export function DopesheetEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grabState !== null]);
 
+  /* ── Wheel zoom/pan + Home view-fit (Blender V2D parity) ─────────────── */
+  // Modifier-discriminated wheel — see TimelineEditor for prose.
+  //   - Plain wheel: browser default (vertical scroll over track rows).
+  //   - Ctrl/Cmd+wheel: horizontal zoom around the cursor's ms position.
+  //   - Shift+wheel: horizontal pan.
+  // Home (hover-gated) clears the dirty latch and refits to [0, duration].
+  useEffect(() => {
+    const onWheel = (e) => {
+      if (!hoverRef.current) return;
+      if (!trackAreaRef.current) return;
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;
+      e.preventDefault();
+      const rect = trackAreaRef.current.getBoundingClientRect();
+      const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
+      const localX = e.clientX - rect.left - LABEL_W;
+      const frac = Math.max(0, Math.min(1, localX / tickAreaWidth));
+      const view = viewBoundsRef.current;
+      const span = Math.max(1, view.end - view.start);
+      viewDirtyRef.current = true;
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        const panMs = (e.deltaY * span) / (tickAreaWidth * 0.5);
+        setViewBounds({ start: view.start + panMs, end: view.end + panMs });
+        return;
+      }
+      // Ctrl/Cmd+wheel zoom. deltaY > 0 = zoom out.
+      const zoomFactor = Math.exp(e.deltaY * 0.001);
+      const newSpan = Math.max(50, Math.min(10_000_000, span * zoomFactor));
+      const cursorMs = view.start + frac * span;
+      setViewBounds({
+        start: cursorMs - frac * newSpan,
+        end: cursorMs + (1 - frac) * newSpan,
+      });
+    };
+    const el = trackAreaRef.current;
+    if (!el) return undefined;
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!hoverRef.current) return;
+      if (e.code !== 'Home') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      viewDirtyRef.current = false;
+      setViewBounds({ start: 0, end: Math.max(1, duration) });
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [duration]);
+
   if (!action) {
     return (
       <div className="flex flex-col h-full bg-card overflow-hidden">
@@ -1185,6 +1299,8 @@ export function DopesheetEditor() {
       <div className="flex-1 overflow-auto">
         <div className="flex flex-col">
           <Ruler
+            viewStartMs={viewStartMs}
+            viewEndMs={viewEndMs}
             duration={duration}
             onSeek={(ms) => setCurrentTime(ms)}
           />
@@ -1209,6 +1325,8 @@ export function DopesheetEditor() {
                   key={row.key}
                   rowIdx={idx}
                   row={row}
+                  viewStartMs={viewStartMs}
+                  viewEndMs={viewEndMs}
                   duration={duration}
                   isActiveChannel={row.fcurveId !== '' && row.fcurveId === activeFCurveId}
                   isActiveKeyformSelected={isKeyformCenterSelected(
@@ -1277,7 +1395,7 @@ export function DopesheetEditor() {
                 duplicated per-row (and the entire dopesheet re-rendered
                 on every playhead tick); now a self-contained subscriber
                 that re-renders only this 1-pixel-wide span. */}
-            <TrackAreaPlayhead duration={duration} />
+            <TrackAreaPlayhead viewStartMs={viewStartMs} viewEndMs={viewEndMs} />
           </div>
         </div>
       </div>
@@ -1285,8 +1403,13 @@ export function DopesheetEditor() {
   );
 }
 
-function Ruler({ duration, onSeek }) {
-  const ticks = useMemo(() => buildRulerTicks(duration), [duration]);
+function Ruler({ viewStartMs, viewEndMs, duration, onSeek }) {
+  const viewSpanMs = Math.max(1, viewEndMs - viewStartMs);
+  const ticks = useMemo(
+    () => buildRulerTicks(viewStartMs, viewEndMs),
+    [viewStartMs, viewEndMs],
+  );
+  const toFrac = (t) => ((t - viewStartMs) / viewSpanMs) * 100;
   return (
     <div
       className="sticky top-0 z-10 bg-card border-b flex"
@@ -1294,11 +1417,14 @@ function Ruler({ duration, onSeek }) {
     >
       <div className="shrink-0 border-r" style={{ width: LABEL_W }} />
       <div
-        className="relative flex-1 cursor-crosshair"
+        className="relative flex-1 cursor-crosshair overflow-hidden"
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
-          const ms = (x / rect.width) * duration;
+          const ms = viewStartMs + (x / rect.width) * viewSpanMs;
+          // Clamp seek to anim bounds [0, duration], NOT view bounds —
+          // view may be panned/zoomed away from the playable range but
+          // the playhead must stay within the action.
           onSeek(Math.max(0, Math.min(duration, ms)));
         }}
       >
@@ -1306,19 +1432,19 @@ function Ruler({ duration, onSeek }) {
           <span
             key={t}
             className="absolute top-0 bottom-0 w-px bg-border/50"
-            style={{ left: `${(t / duration) * 100}%` }}
+            style={{ left: `${toFrac(t)}%` }}
           />
         ))}
         {ticks.map((t) => (
           <span
             key={`l-${t}`}
             className="absolute top-0 text-[9px] text-muted-foreground/70 -translate-x-1/2 px-0.5"
-            style={{ left: `${(t / duration) * 100}%` }}
+            style={{ left: `${toFrac(t)}%` }}
           >
             {(t / 1000).toFixed(1)}
           </span>
         ))}
-        <RulerPlayhead duration={duration} />
+        <RulerPlayhead viewStartMs={viewStartMs} viewEndMs={viewEndMs} />
       </div>
     </div>
   );
@@ -1329,14 +1455,16 @@ function Ruler({ duration, onSeek }) {
  * inside the parent's track area as a sibling overlay so a `currentTime`
  * change only re-renders this 1-pixel span, not the whole dopesheet.
  *
- * @param {{ duration: number }} props
+ * @param {{ viewStartMs: number, viewEndMs: number }} props
  */
-function RulerPlayhead({ duration }) {
+function RulerPlayhead({ viewStartMs, viewEndMs }) {
   const currentTime = useAnimationStore((s) => s.currentTime);
+  const viewSpanMs = Math.max(1, viewEndMs - viewStartMs);
+  const pct = ((currentTime - viewStartMs) / viewSpanMs) * 100;
   return (
     <span
       className="absolute top-0 bottom-0 w-px bg-primary pointer-events-none"
-      style={{ left: `${(currentTime / duration) * 100}%` }}
+      style={{ left: `${pct}%` }}
       aria-hidden
     />
   );
@@ -1347,22 +1475,24 @@ function RulerPlayhead({ duration }) {
  * the per-row playhead spans that were being rendered inside every Row
  * (and dragged the whole dopesheet into a re-render on every tick).
  *
- * @param {{ duration: number }} props
+ * @param {{ viewStartMs: number, viewEndMs: number }} props
  */
-function TrackAreaPlayhead({ duration }) {
+function TrackAreaPlayhead({ viewStartMs, viewEndMs }) {
   const currentTime = useAnimationStore((s) => s.currentTime);
+  const viewSpanMs = Math.max(1, viewEndMs - viewStartMs);
+  const frac = (currentTime - viewStartMs) / viewSpanMs;
   // Offset by LABEL_W so the line sits over the timeline area, not the
   // left-side label column.
   return (
     <span
       className="absolute top-0 bottom-0 w-px bg-primary/60 pointer-events-none z-10"
-      style={{ left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${currentTime / duration})` }}
+      style={{ left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${frac})` }}
       aria-hidden
     />
   );
 }
 
-function Row({ rowIdx, row, duration, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek, onRowPointerEnter, onRowPointerLeave }) {
+function Row({ rowIdx, row, viewStartMs, viewEndMs, duration, isActiveChannel, isActiveKeyformSelected, selectionHandles, grabSelectedIdxSet, grabDeltaMs, onTickClick, onSeek, onRowPointerEnter, onRowPointerLeave }) {
   const { isMuted, activeKfIdx } = row;
   // Audit-fix M2 (Slice 5.W arch audit 2026-05-17): z-order extracted
   // to `getKeyformRenderOrder` in dopesheetRows.js for unit-testability.
@@ -1426,17 +1556,21 @@ function Row({ rowIdx, row, duration, isActiveChannel, isActiveKeyformSelected, 
         <span className="text-muted-foreground tabular-nums ml-auto">{row.keyforms.length}</span>
       </div>
       <div
-        className="relative flex-1 h-full"
+        className="relative flex-1 h-full overflow-hidden"
         style={{ opacity: isMuted ? 0.4 : 1 }}
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const x = e.clientX - rect.left;
-          onSeek((x / rect.width) * duration);
+          const viewSpan = Math.max(1, viewEndMs - viewStartMs);
+          const ms = viewStartMs + (x / rect.width) * viewSpan;
+          // Clamp to anim bounds, not view (view may extend past duration).
+          onSeek(Math.max(0, Math.min(duration, ms)));
         }}
       >
         {orderedIndices.map((i) => {
           const kf = row.keyforms[i];
-          const left = (kf.time / duration) * 100;
+          const viewSpan = Math.max(1, viewEndMs - viewStartMs);
+          const left = ((kf.time - viewStartMs) / viewSpan) * 100;
           const isActiveHalo = showActiveHalo && i === activeKfIdx;
           // Slice 6.A — per-tick selection state. Empty-fcurveId rows
           // (group headers / row-without-fcurve) never participate in
@@ -1505,7 +1639,8 @@ function Row({ rowIdx, row, duration, isActiveChannel, isActiveKeyformSelected, 
           const kf = row.keyforms[i];
           if (!kf) return null;
           const ghostTime = kf.time + grabDeltaMs;
-          const ghostLeft = (ghostTime / duration) * 100;
+          const viewSpan = Math.max(1, viewEndMs - viewStartMs);
+          const ghostLeft = ((ghostTime - viewStartMs) / viewSpan) * 100;
           return (
             <span
               key={`ghost-${i}`}
@@ -1525,14 +1660,18 @@ function Row({ rowIdx, row, duration, isActiveChannel, isActiveKeyformSelected, 
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-function buildRulerTicks(duration) {
-  // Aim for 5–10 labelled ticks regardless of duration.
+function buildRulerTicks(viewStartMs, viewEndMs) {
+  // Aim for 5–10 labelled ticks across the visible view span. Step is
+  // chosen so it's a round number relative to the visible range, not
+  // the action's total duration. Supports negative viewStart.
+  const span = Math.max(1, viewEndMs - viewStartMs);
   const target = 8;
-  const raw = duration / target;
-  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const raw = span / target;
+  const pow = Math.pow(10, Math.floor(Math.log10(Math.max(1e-3, raw))));
   const step = Math.max(pow, Math.round(raw / pow) * pow);
   const out = [];
-  for (let t = 0; t <= duration + 0.5; t += step) out.push(t);
+  const first = Math.floor(viewStartMs / step) * step;
+  for (let t = first; t <= viewEndMs + 0.5; t += step) out.push(t);
   return out;
 }
 
