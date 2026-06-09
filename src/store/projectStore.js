@@ -1902,9 +1902,15 @@ export const useProjectStore = create((set, get) => {
         `${orphanIds.length} orphan parameter ref(s) after Init Rig: ${orphanIds.join(', ')}`,
         Object.fromEntries(
           orphanIds.map(id => [id, {
-            animationTracks: orphans[id].animationTracks.map(r => r.location),
-            bindings:        orphans[id].bindings.map(r => r.location),
-            physicsInputs:   orphans[id].physicsInputs.map(r => r.location),
+            // Field names match the `ReferenceReport` shape returned by
+            // `findOrphanReferences` (paramReferences.js:55-64). Pre-fix
+            // this read `.animationTracks` which doesn't exist on the
+            // report — the branch only fires when orphans are present
+            // (Init Rig after a param was deleted / a tag dropped), so
+            // the mismatch went latent for months until the user hit it.
+            actionFCurves:  orphans[id].actionFCurves.map(r => r.location),
+            bindings:       orphans[id].bindings.map(r => r.location),
+            physicsInputs:  orphans[id].physicsInputs.map(r => r.location),
           }])
         )
       );

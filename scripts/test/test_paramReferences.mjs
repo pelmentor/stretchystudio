@@ -204,6 +204,28 @@ function assert(cond, name) {
 
   assert(orphans.ParamSmile.actionFCurves.length === 1, 'ParamSmile orphan has its action ref');
   assert(orphans.ParamPhantomDriver.physicsInputs.length === 1, 'ParamPhantomDriver has its physics ref');
+
+  // Regression pin (2026-06-09): the seedAllRig orphan-warning branch
+  // (projectStore.js ~line 1900) builds a log payload by reading
+  // `actionFCurves` / `bindings` / `physicsInputs` off each report.
+  // Pre-fix it read `animationTracks` which doesn't exist on the
+  // report — the call threw "Cannot read properties of undefined" any
+  // time orphans were present. Mirror that call shape here so a future
+  // rename of any of these three field names fails the test loudly
+  // instead of going latent until the next user import.
+  const payload = Object.fromEntries(
+    Object.keys(orphans).map(id => [id, {
+      actionFCurves:  orphans[id].actionFCurves.map(r => r.location),
+      bindings:       orphans[id].bindings.map(r => r.location),
+      physicsInputs:  orphans[id].physicsInputs.map(r => r.location),
+    }])
+  );
+  assert(Array.isArray(payload.ParamSmile.actionFCurves),
+    'log-payload shape: actionFCurves array present');
+  assert(Array.isArray(payload.ParamPhantomDriver.physicsInputs),
+    'log-payload shape: physicsInputs array present');
+  assert(Array.isArray(payload.ParamHairFront.bindings),
+    'log-payload shape: bindings array present');
 }
 
 // ── No orphans case ────────────────────────────────────────────────
