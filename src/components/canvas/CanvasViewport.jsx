@@ -51,6 +51,7 @@ import { ScenePass } from '@/renderer/scenePass';
 // the user actually drops a PSD onto the canvas.
 import { detectCharacterFormat } from '@/io/armatureMeta';
 import SkeletonOverlay from '@/components/canvas/SkeletonOverlay';
+import { FpsOverlay } from '@/components/canvas/FpsOverlay';
 import { useWizardStore } from '@/store/wizardStore';
 import { useCaptureStore } from '@/store/captureStore';
 // Phase A2 (2026-05-09) — PsdImportService is only reached on a PSD
@@ -4000,6 +4001,8 @@ export default function CanvasViewport({
           directly. The canvas exposes its imperative bridges
           (finalizePsdImport / autoMeshAllParts) through `captureStore`
           via the effect in this component. */}
+
+      <FpsOverlay />
 
       {/* Wipe project confirmation */}
       <AlertDialog open={confirmWipeOpen} onOpenChange={setConfirmWipeOpen}>
