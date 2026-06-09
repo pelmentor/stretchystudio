@@ -1031,9 +1031,25 @@ export default function CanvasViewport({
                   useProjectStore.getState().updateProject((p) => {
                     const a = (p.actions ?? []).find((x) => x.id === _action.id);
                     if (!a) return;
-                    for (const paramId of Object.keys(realUpdates)) {
+                    // Iterate the FULL `updates` set (every live-preview
+                    // driver's value this frame), NOT `realUpdates` (the
+                    // epsilon-filtered changed-only subset). `realUpdates`
+                    // is the right gate for `setMany` — no store write
+                    // when value is unchanged — but it's WRONG for record
+                    // keying: if ParamAngleX is held at 5 while ParamBreath
+                    // moves on a sine, only ParamBreath would get a key
+                    // this frame and ParamAngleX would keep its last key
+                    // at some earlier frame. On playback, interpolation
+                    // between sparse per-param keys distorts the recorded
+                    // trajectory (phantom motion for params that were
+                    // actually constant). Recording is "snapshot every
+                    // driver at this frame", not "snapshot drivers that
+                    // changed". `insertKeyformAtInAction` with NOFLAGS
+                    // replaces the existing key at this time, so the
+                    // store stays compact (one key per frame per driver).
+                    for (const paramId of Object.keys(updates)) {
                       const rnaPath = `objects["__params__"].values["${paramId}"]`;
-                      insertKeyformAtInAction(a, rnaPath, _snappedMs, realUpdates[paramId], INSERTKEY_FLAGS.NOFLAGS);
+                      insertKeyformAtInAction(a, rnaPath, _snappedMs, updates[paramId], INSERTKEY_FLAGS.NOFLAGS);
                     }
                   }, { skipHistory: !_firstWriteOfSession });
                   recordSessionRef.current = {
