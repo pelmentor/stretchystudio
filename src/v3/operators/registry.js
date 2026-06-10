@@ -44,6 +44,11 @@ import { cutMeshAlongLine } from './edit/knife.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
 import { autoSkinAllParts } from '../../io/live2d/rig/autoSkinning.js';
+import { logger } from '../../lib/logger.js';
+
+/** Dedupe signature for the transform.rotate diagnostic. Spamming R
+ *  should log once per distinct selection shape, not every press. */
+let _lastTransformRotateSig = null;
 // Phase 7.A — Object Mode tools (Snap / Mirror / Parent / Set Origin).
 // Eager-import per audit lesson G-1 (`async exec` leaks unhandled rejections
 // when the dispatcher fires `op.exec(...)` non-await).
@@ -1026,7 +1031,46 @@ function registerBuiltins() {
       || useSelectionStore.getState().items.some(
         (it) => it.type === 'part' || it.type === 'group',
       ),
-    exec: () => { if (!beginVertexModalTransform('rotate')) beginModalTransform('rotate'); },
+    exec: () => {
+      // 2026-06-10 diagnostic — user report "R on a bone doesn't
+      // rotate the skeleton at all, only the visual gizmo works".
+      // Log the state every R-key invocation so the failure mode
+      // is one log line away. Deduped by selection-shape signature
+      // so spamming R doesn't flood.
+      const _ed = useEditorStore.getState();
+      const _sel = useSelectionStore.getState().items;
+      const _sig = `${_ed.editMode ?? 'object'}|${_sel.map((it) => `${it?.type}:${it?.id}`).join(',')}`;
+      if (_sig !== _lastTransformRotateSig) {
+        _lastTransformRotateSig = _sig;
+        const proj = useProjectStore.getState().project;
+        const targets = _sel
+          .filter((it) => it?.type === 'part' || it?.type === 'group')
+          .map((it) => {
+            const node = proj?.nodes?.find((n) => n?.id === it.id);
+            return {
+              id: it.id,
+              type: it.type,
+              isBone: node ? (node.type === 'group' && typeof node.boneRole === 'string') : null,
+              boneRole: node?.boneRole ?? null,
+              name: node?.name ?? null,
+            };
+          });
+        logger.info('transformRotate',
+          `R-key: editMode=${_ed.editMode ?? 'object'}, ${targets.length} target(s)`,
+          {
+            editMode: _ed.editMode ?? 'object',
+            selectionItems: _sel.length,
+            targets,
+            editorStoreSelection: _ed.selection,
+            hint: targets.length === 0
+              ? (_ed.selection?.length > 0
+                ? 'editorStore.selection has ids but selectionStore.items has no part/group entries — selection is split between stores. selectBoneInBothStores fixes this; verify the click path.'
+                : 'No part/group selected. Click a bone in pose mode first.')
+              : 'Selection looks correct — modal should engage on the next pointer move.',
+          });
+      }
+      if (!beginVertexModalTransform('rotate')) beginModalTransform('rotate');
+    },
   });
   registerOperator({
     id: 'transform.scale',

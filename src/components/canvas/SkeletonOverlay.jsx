@@ -728,7 +728,27 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
           onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
           onClick={() => {
             if (skeletonEditMode) return;
-            selectBoneInBothStores(node.id);
+            // Blender Object Mode: clicking any bone selects the
+            // ARMATURE OBJECT, not the individual bone. Bones are
+            // selectable only in Pose Mode. Walk up to the topmost
+            // bone-group ancestor (the armature root) and select THAT.
+            // Pre-2026-06-10 the click selected the individual bone in
+            // both modes — wrong per RULE №4. User report:
+            // "in object mode when clicking on armature and bones —
+            // you can select bones — which weird and not blender
+            // behaviour at all."
+            const proj = useProjectStore.getState().project;
+            const byId = new Map();
+            for (const n of proj?.nodes ?? []) if (n?.id) byId.set(n.id, n);
+            let cur = node;
+            const seen = new Set();
+            while (cur?.parent && !seen.has(cur)) {
+              seen.add(cur);
+              const next = byId.get(cur.parent);
+              if (!next || next.type !== 'group' || typeof next.boneRole !== 'string') break;
+              cur = next;
+            }
+            selectBoneInBothStores(cur.id);
           }}
         />
       );
@@ -741,7 +761,27 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
           onPointerDown={(e) => onPointerDown(e, node.id, 'joint')}
           onClick={() => {
             if (skeletonEditMode) return;
-            selectBoneInBothStores(node.id);
+            // Blender Object Mode: clicking any bone selects the
+            // ARMATURE OBJECT, not the individual bone. Bones are
+            // selectable only in Pose Mode. Walk up to the topmost
+            // bone-group ancestor (the armature root) and select THAT.
+            // Pre-2026-06-10 the click selected the individual bone in
+            // both modes — wrong per RULE №4. User report:
+            // "in object mode when clicking on armature and bones —
+            // you can select bones — which weird and not blender
+            // behaviour at all."
+            const proj = useProjectStore.getState().project;
+            const byId = new Map();
+            for (const n of proj?.nodes ?? []) if (n?.id) byId.set(n.id, n);
+            let cur = node;
+            const seen = new Set();
+            while (cur?.parent && !seen.has(cur)) {
+              seen.add(cur);
+              const next = byId.get(cur.parent);
+              if (!next || next.type !== 'group' || typeof next.boneRole !== 'string') break;
+              cur = next;
+            }
+            selectBoneInBothStores(cur.id);
           }}
         />
       );
