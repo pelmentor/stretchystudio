@@ -95,6 +95,7 @@ import {
   setMesh,
   clearMesh,
   getBoneRole,
+  getBonePose,
 } from '@/store/objectDataAccess';
 import { isLatticeCageObject } from '@/store/warpLatticeAccess';
 import {
@@ -1205,6 +1206,58 @@ export default function CanvasViewport({
           for (const _n of _projForNodes.nodes) _nbiCache.map.set(_n.id, _n);
         }
         const nodesById = _nbiCache.map;
+
+        // BONE → PARAM mirror. SS's auto-rig wires the body's
+        // deformation via `ParamRotation_<bone>` parameters that drive
+        // Cubism warps; the bone itself is "just a mirror" of the
+        // param (per [[physics-bone-mirror-overlay]]). The existing
+        // PARAM → BONE overlay (a few lines above, preview-mode only)
+        // handles physics/breath fanning out to bone pose. THIS pass
+        // handles the OPPOSITE direction: when the user keyframes a
+        // bone OR drags it in pose mode, the bone's effective rotation
+        // is mirrored into the corresponding `ParamRotation_<bone>` so
+        // the warp evaluator sees the rotated value and the mesh
+        // deforms. Without this, bone keyframes leave the bone visually
+        // rotated in the skeleton overlay but the mesh stays at rest —
+        // the symptom the user reported as "armature moves, layers
+        // don't follow."
+        //
+        // Effective rotation source priority:
+        //   1. `poseOverrides[boneId].rotation` — action fcurve + user
+        //      draftPose (covers animation playback + animation-mode
+        //      drag).
+        //   2. `node.pose.rotation` — committed staging-mode drag (which
+        //      writes via `writePoseValues` direct to projectStore).
+        //
+        // Mirrors valuesForEval only (the eval working copy); does NOT
+        // write to paramValuesStore, so we don't churn the store per
+        // tick. This matches the runtime-driver pattern from the
+        // physics-bone-mirror revert: overlay at eval setup, no
+        // projectStore fan-out.
+        const _byBone = useParamValuesStore.getState().boneMirror?.byBone;
+        if (_byBone && _byBone.size > 0) {
+          let _mutated = false;
+          let _merged = valuesForEval;
+          for (const [boneId, paramId] of _byBone) {
+            let rotation;
+            const ov = poseOverrides?.get(boneId);
+            if (ov && typeof ov === 'object' && typeof ov.rotation === 'number'
+                && Number.isFinite(ov.rotation)) {
+              rotation = ov.rotation;
+            } else {
+              const bone = nodesById.get(boneId);
+              if (!bone) continue;
+              const p = getBonePose(bone);
+              const r = p?.rotation;
+              if (typeof r !== 'number' || !Number.isFinite(r)) continue;
+              rotation = r;
+            }
+            if (valuesForEval[paramId] === rotation) continue;
+            if (!_mutated) { _merged = { ...valuesForEval }; _mutated = true; }
+            _merged[paramId] = rotation;
+          }
+          if (_mutated) valuesForEval = _merged;
+        }
 
         const rigDrivenParts = new Set();
         const _rigSpec = rigSpecRef.current;

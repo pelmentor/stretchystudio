@@ -22,7 +22,8 @@
 
 import { computePoseOverrides, computeParamOverrides } from '../../../renderer/animationEngine.js';
 import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
-import { getMesh } from '../../../store/objectDataAccess.js';
+import { getMesh, getBonePose } from '../../../store/objectDataAccess.js';
+import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 
 /**
  * @typedef {Object} CaptureOptions
@@ -151,6 +152,34 @@ export function captureExportFrame(ctx, opts) {
       const paramOv = computeParamOverrides(action, timeMs, loopKeyframes, endMs);
       for (const [pid, v] of paramOv) {
         if (Number.isFinite(v)) paramValuesForEval[pid] = v;
+      }
+
+      // BONE → PARAM mirror — mirror live tick. SS body deformation
+      // flows through `ParamRotation_<bone>` warps; bone keyframes set
+      // `bone.pose.rotation` via the override Map but the warps eval
+      // from param values, not bone pose. Mirror each bone's effective
+      // rotation into its mirrored param so PNG export matches the
+      // CanvasViewport tick (see CanvasViewport.jsx BONE → PARAM block
+      // for the live counterpart + the "armature moves, layers don't"
+      // bug background).
+      const _byBone = useParamValuesStore.getState().boneMirror?.byBone;
+      if (_byBone && _byBone.size > 0) {
+        for (const [boneId, paramId] of _byBone) {
+          let rotation;
+          const ov = poseOverrides?.get(boneId);
+          if (ov && typeof ov === 'object' && typeof ov.rotation === 'number'
+              && Number.isFinite(ov.rotation)) {
+            rotation = ov.rotation;
+          } else {
+            const bone = exportProject.nodes.find((n) => n.id === boneId);
+            if (!bone) continue;
+            const p = getBonePose(bone);
+            const r = p?.rotation;
+            if (typeof r !== 'number' || !Number.isFinite(r)) continue;
+            rotation = r;
+          }
+          paramValuesForEval[paramId] = rotation;
+        }
       }
 
       for (const node of exportProject.nodes) {
