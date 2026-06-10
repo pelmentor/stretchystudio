@@ -92,6 +92,26 @@ export function kernelAnimationTrackEval(op, ctx) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 
   if (target.kind === 'param') {
+    // Bone-mirror priority gate (RULE №4). When the param is bone-
+    // mirrored AND the bone has a rotation override in ctx.poseOverrides
+    // (from the user's bone fcurve or pose-mode draft), skip this
+    // param fcurve write so the pre-eval seed (CanvasViewport's BONE
+    // → PARAM mirror) survives. Without this, a procedural
+    // `ParamRotation_<bone>` fcurve in the action would overwrite the
+    // bone's authored value and the mesh would keep following the
+    // procedural — the user's bone keyframe invisible. See
+    // [[bone-to-param-mirror-priority]].
+    const mirrorByParam = /** @type {any} */ (ctx).boneMirrorByParam;
+    if (mirrorByParam instanceof Map) {
+      const boneId = mirrorByParam.get(target.paramId);
+      if (boneId) {
+        const poseOv = /** @type {any} */ (ctx).poseOverrides;
+        const boneEntry = poseOv instanceof Map ? poseOv.get(boneId) : null;
+        if (boneEntry instanceof Map && boneEntry.has('rotation')) {
+          return undefined;
+        }
+      }
+    }
     ctx.paramOverrides?.set(target.paramId, value);
   } else if (target.kind === 'node') {
     const poseOverrides = /** @type {any} */ (ctx).poseOverrides;

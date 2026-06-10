@@ -144,6 +144,16 @@ export function evalProjectFrameViaDepgraph(project, paramValues, opts = {}) {
     requiredMode: opts.requiredMode,
     rigArtMeshById: buildRigArtMeshIndex(opts.rigSpec),
     poseOverrides: buildPoseOverrideIndex(opts.poseOverrides),
+    // Bone-mirror priority gate (RULE №4 — bone is canonical, param is the
+    // legacy slot). When an action carries BOTH a procedural
+    // `ParamRotation_<bone>` param fcurve AND the user's bone fcurve for
+    // the same channel, kernelAnimationTrackEval needs to skip the param
+    // fcurve write so the pre-eval seed (CanvasViewport's BONE → PARAM
+    // mirror) survives. Without this map, the kernel overwrites the
+    // mirrored bone value with the procedural param value and the
+    // mesh continues following the procedural — the user's bone
+    // keyframe is invisible.
+    boneMirrorByParam: opts.boneMirrorByParam ?? null,
   });
   /** @type {ArtMeshFrame[]} */
   const frames = [];

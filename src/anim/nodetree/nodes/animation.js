@@ -59,6 +59,19 @@ registerNodeType({
     if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
 
     if (target.kind === 'param') {
+      // Mirror of kernelAnimationTrackEval's bone-mirror priority gate.
+      // See [[bone-to-param-mirror-priority]] for the rationale.
+      const mirrorByParam = ctx?.boneMirrorByParam;
+      if (mirrorByParam instanceof Map) {
+        const boneId = mirrorByParam.get(target.paramId);
+        if (boneId) {
+          const poseOv = ctx?.poseOverrides;
+          const boneEntry = poseOv instanceof Map ? poseOv.get(boneId) : null;
+          if (boneEntry instanceof Map && boneEntry.has('rotation')) {
+            return undefined;
+          }
+        }
+      }
       ctx?.paramOverrides?.set?.(target.paramId, value);
     } else if (target.kind === 'node') {
       const poseOverrides = ctx?.poseOverrides;

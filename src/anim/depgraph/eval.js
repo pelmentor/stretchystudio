@@ -180,6 +180,7 @@ export function evalDepGraph(graph, ctxIn) {
     physics: ctxIn.physics,
     poseOverrides: ctxIn.poseOverrides ?? new Map(),
     rigArtMeshById: ctxIn.rigArtMeshById ?? null,
+    boneMirrorByParam: ctxIn.boneMirrorByParam ?? null,
     artMeshBboxTrace: ctxIn.artMeshBboxTrace,
   };
 

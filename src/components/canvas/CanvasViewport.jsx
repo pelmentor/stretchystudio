@@ -1234,23 +1234,37 @@ export default function CanvasViewport({
         // tick. This matches the runtime-driver pattern from the
         // physics-bone-mirror revert: overlay at eval setup, no
         // projectStore fan-out.
-        const _byBone = useParamValuesStore.getState().boneMirror?.byBone;
-        if (_byBone && _byBone.size > 0) {
+        const _byBoneMirror = useParamValuesStore.getState().boneMirror?.byBone;
+        const _byParamMirror = useParamValuesStore.getState().boneMirror?.byParam;
+        if (_byBoneMirror && _byBoneMirror.size > 0) {
+          // Animation mode vs staging mode source priority:
+          //   - Animation mode: ONLY mirror when poseOverrides carries an
+          //     explicit rotation (bone fcurve OR draftPose drag). Without
+          //     this gate, the fallback to `bone.pose.rotation = 0` would
+          //     overwrite the procedural `ParamRotation_<bone>` fcurve seed
+          //     with rest pose for every bone that isn't currently keyed —
+          //     killing the procedural Idle motion.
+          //   - Staging mode (no action playing): fall back to
+          //     `bone.pose.rotation` so direct pose-drag (writePoseValues)
+          //     reaches the param without going through an fcurve.
+          const _isAnimMode = getEditorMode() === 'animation';
           let _mutated = false;
           let _merged = valuesForEval;
-          for (const [boneId, paramId] of _byBone) {
+          for (const [boneId, paramId] of _byBoneMirror) {
             let rotation;
             const ov = poseOverrides?.get(boneId);
             if (ov && typeof ov === 'object' && typeof ov.rotation === 'number'
                 && Number.isFinite(ov.rotation)) {
               rotation = ov.rotation;
-            } else {
+            } else if (!_isAnimMode) {
               const bone = nodesById.get(boneId);
               if (!bone) continue;
               const p = getBonePose(bone);
               const r = p?.rotation;
               if (typeof r !== 'number' || !Number.isFinite(r)) continue;
               rotation = r;
+            } else {
+              continue;
             }
             if (valuesForEval[paramId] === rotation) continue;
             if (!_mutated) { _merged = { ...valuesForEval }; _mutated = true; }
@@ -1306,6 +1320,13 @@ export default function CanvasViewport({
               action: activeAction,
               timeMs: anim.currentTime,
               liftedGrids: evalOut?.liftedGrids,
+              // Bone-mirror priority gate — see CanvasViewport's
+              // BONE → PARAM block above + the kernel-side gate in
+              // anim/depgraph/kernels/animation.js. When a procedural
+              // `ParamRotation_<bone>` fcurve and the user's bone fcurve
+              // both exist, the kernel skips the param write so the
+              // pre-eval seed survives.
+              boneMirrorByParam: _byParamMirror ?? undefined,
               // Source keyform data from the rigSpec so modifier-toggle
               // reprojection (selectRigSpec `needsReproject`) is honoured —
               // raw `mesh.runtime` keyforms stay in the baked leaf frame.

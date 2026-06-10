@@ -89,6 +89,94 @@ function assertNear(a, b, eps, name) {
     'depgraph pose fcurve: byte-equal to computePoseOverrides');
 }
 
+// ---- Bone-mirror priority gate ----
+//
+// When a `ParamRotation_<bone>` param is bone-mirrored AND the bone has a
+// rotation override in poseOverrides, `kernelAnimationTrackEval` must skip
+// the param fcurve write so the pre-eval seed (CanvasViewport's
+// BONE → PARAM mirror) survives. Without this, a procedural Idle param
+// fcurve overwrites the user's bone-keyframed value and the mesh keeps
+// following the procedural — the user's bone keyframe invisible.
+//
+// User-reported as "armature moves, layers don't follow" — repro: open
+// a procedural Idle action that animates ParamRotation_rightArm, add a
+// bone fcurve on the rightArm bone's pose.rotation. Pre-fix the mesh
+// followed the procedural; post-fix the bone fcurve wins.
+
+{
+  const project = {
+    parameters: [
+      { id: 'ParamRotation_rightArm', default: 0 },
+    ],
+    nodes: [
+      { id: 'rightArm', type: 'group', boneRole: 'rightArm' },
+    ],
+    actions: [], physicsRules: [],
+  };
+  const action = {
+    fcurves: [
+      // Procedural param fcurve (Idle-style).
+      {
+        id: 'paramFc',
+        rnaPath: 'objects["__params__"].values["ParamRotation_rightArm"]',
+        arrayIndex: 0,
+        keyforms: [
+          { time: 0,    value: 0,  easing: 'linear', type: 'linear' },
+          { time: 1000, value: 50, easing: 'linear', type: 'linear' },
+        ],
+        modifiers: [],
+        extrapolation: 'constant',
+      },
+    ],
+  };
+  const graph = buildDepGraph(project, { action });
+
+  // Without bone fcurve / poseOverrides: procedural param fcurve wins.
+  {
+    const ctx = evalDepGraph(graph, {
+      project, timeMs: 500, action,
+      paramOverrides: new Map(),
+      poseOverrides: new Map(),
+      boneMirrorByParam: new Map([['ParamRotation_rightArm', 'rightArm']]),
+    });
+    assertNear(ctx.paramOverrides.get('ParamRotation_rightArm'), 25, 1e-6,
+      'bone-mirror gate: no bone override → procedural param fcurve wins');
+  }
+
+  // With bone rotation override (user keyed the bone): pre-seed survives.
+  {
+    const paramOv = new Map();
+    paramOv.set('ParamRotation_rightArm', 99);  // pre-eval seed (CanvasViewport mirror)
+    const poseOv = new Map();
+    poseOv.set('rightArm', new Map([['rotation', 99]]));
+    const ctx = evalDepGraph(graph, {
+      project, timeMs: 500, action,
+      paramOverrides: paramOv,
+      poseOverrides: poseOv,
+      boneMirrorByParam: new Map([['ParamRotation_rightArm', 'rightArm']]),
+    });
+    assertNear(ctx.paramOverrides.get('ParamRotation_rightArm'), 99, 1e-6,
+      'bone-mirror gate: bone rotation override → bone wins (param fcurve skipped)');
+  }
+
+  // Without boneMirrorByParam map: kernel falls through to old behaviour
+  // (param fcurve always wins). Pins the gate's opt-in shape.
+  {
+    const paramOv = new Map();
+    paramOv.set('ParamRotation_rightArm', 99);
+    const poseOv = new Map();
+    poseOv.set('rightArm', new Map([['rotation', 99]]));
+    const ctx = evalDepGraph(graph, {
+      project, timeMs: 500, action,
+      paramOverrides: paramOv,
+      poseOverrides: poseOv,
+      // no boneMirrorByParam
+    });
+    assertNear(ctx.paramOverrides.get('ParamRotation_rightArm'), 25, 1e-6,
+      'bone-mirror gate: opt-in via boneMirrorByParam; absent → legacy behaviour');
+  }
+}
+
 // ---- I-key (keying-set) prefixed-rnaPath bone pose fcurve normalisation ----
 //
 // The K-key path (`insertAllProperties`) emits bare rnaPaths like

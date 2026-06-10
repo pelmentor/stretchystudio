@@ -22,7 +22,7 @@
 
 import { computePoseOverrides, computeParamOverrides } from '../../../renderer/animationEngine.js';
 import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
-import { getMesh, getBonePose } from '../../../store/objectDataAccess.js';
+import { getMesh } from '../../../store/objectDataAccess.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 
 /**
@@ -162,23 +162,21 @@ export function captureExportFrame(ctx, opts) {
       // CanvasViewport tick (see CanvasViewport.jsx BONE → PARAM block
       // for the live counterpart + the "armature moves, layers don't"
       // bug background).
+      //
+      // Export is "animation playback" — only mirror when poseOverrides
+      // carries an explicit rotation (bone fcurve or draftPose). Falling
+      // back to `bone.pose.rotation = 0` would clobber procedural
+      // `ParamRotation_<bone>` fcurves with rest pose for every bone
+      // that isn't currently keyed.
       const _byBone = useParamValuesStore.getState().boneMirror?.byBone;
       if (_byBone && _byBone.size > 0) {
         for (const [boneId, paramId] of _byBone) {
-          let rotation;
           const ov = poseOverrides?.get(boneId);
-          if (ov && typeof ov === 'object' && typeof ov.rotation === 'number'
-              && Number.isFinite(ov.rotation)) {
-            rotation = ov.rotation;
-          } else {
-            const bone = exportProject.nodes.find((n) => n.id === boneId);
-            if (!bone) continue;
-            const p = getBonePose(bone);
-            const r = p?.rotation;
-            if (typeof r !== 'number' || !Number.isFinite(r)) continue;
-            rotation = r;
+          if (!ov || typeof ov !== 'object'
+              || typeof ov.rotation !== 'number' || !Number.isFinite(ov.rotation)) {
+            continue;
           }
-          paramValuesForEval[paramId] = rotation;
+          paramValuesForEval[paramId] = ov.rotation;
         }
       }
 
@@ -232,6 +230,11 @@ export function captureExportFrame(ctx, opts) {
         action: actionForEval,
         timeMs,
         poseOverrides: poseOverrides ?? undefined,
+        // Bone-mirror priority gate — same shape as CanvasViewport's
+        // live tick. When a procedural param fcurve AND a user bone
+        // fcurve animate the same channel, the kernel skips the param
+        // write so the BONE → PARAM mirror seed (above) survives.
+        boneMirrorByParam: useParamValuesStore.getState().boneMirror?.byParam ?? undefined,
       });
     } catch (err) {
       // Depgraph throws on malformed input — we'd rather export a
