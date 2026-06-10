@@ -254,6 +254,46 @@ function _seedDefaultsForRig(rigSpec, project) {
   // had defaulted to 0 while bones carried real rotations from save.
   const entries = _buildBoneMirrorEntries(project);
   useParamValuesStore.getState().setBoneMirrorRegistry(entries);
+  // Diagnostic — the BONE → PARAM mirror at viewport eval setup depends
+  // entirely on these entries being populated. If a user reports
+  // "bones don't move the layers", first thing to check is whether the
+  // registry has the bone they're rotating. Log both the count and the
+  // first few entries so the failure mode is obvious in the Logs panel.
+  // Dedupe by signature so repeat re-seeds don't flood.
+  const _sig = entries.map((e) => `${e.boneId}:${e.paramId}`).join(',');
+  if (_sig !== _lastBoneMirrorSig) {
+    _lastBoneMirrorSig = _sig;
+    if (entries.length === 0) {
+      // Investigate-mode help: list the bones we ARE seeing + the params
+      // we ARE seeing so we can spot a naming mismatch from one log line.
+      const nodes = project?.nodes ?? [];
+      const params = project?.parameters ?? [];
+      const bones = nodes.filter((n) => isBoneGroup(n));
+      const boneNames = bones.map((b) => b.name || b.id).slice(0, 8);
+      const rotParams = params
+        .filter((p) => p?.id?.startsWith('ParamRotation_'))
+        .map((p) => p.id)
+        .slice(0, 8);
+      logger.warn('boneMirror',
+        `setBoneMirrorRegistry: 0 entries (${bones.length} bones, ${params.length} params; ${rotParams.length} ParamRotation_*)`,
+        {
+          boneCount: bones.length,
+          boneNamesSample: boneNames,
+          paramCount: params.length,
+          rotationParamSample: rotParams,
+          hint: rotParams.length === 0
+            ? 'No ParamRotation_* params exist — bone-mirror requires init rig to create them. Click Initialize Rig.'
+            : 'Bone names do not match ParamRotation_* param suffixes. Check sanitisePartName mapping.',
+        });
+    } else {
+      logger.info('boneMirror',
+        `setBoneMirrorRegistry: ${entries.length} entries`,
+        {
+          count: entries.length,
+          sample: entries.slice(0, 6),
+        });
+    }
+  }
   if (entries.length > 0) {
     useParamValuesStore.getState().syncFromProject();
   }
@@ -267,6 +307,9 @@ function _seedDefaultsForRig(rigSpec, project) {
 // shape edits, puppet pin add/remove. Tag changes don't bump geometry but
 // usually accompany a mesh re-emission — Initialize-Rig click is the
 // canonical re-build path either way.
+/** Dedupe signature for the boneMirror diagnostic log. */
+let _lastBoneMirrorSig = null;
+
 let _prevGeometryVersion = useProjectStore.getState().versionControl?.geometryVersion ?? 0;
 useProjectStore.subscribe((state) => {
   const cur = state.versionControl?.geometryVersion ?? 0;

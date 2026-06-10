@@ -418,6 +418,9 @@ export default function CanvasViewport({
   const clickCycleRef = useRef(/** @type {{clientX:number, clientY:number} | null} */(null));
   // BUG-015 instrumentation — throttle for the BodyAngle eval-watch log.
   const lastBodyAngleLogTimestampRef = useRef(0);
+  // 2026-06-10 Kora bones-don't-move bug — throttle the empty-registry warn
+  // so the eval tick doesn't flood the log panel when no bones map.
+  const lastBoneMirrorEmptyLogTimestampRef = useRef(0);
   // Toolset Phase 1.B — lasso candidate state (deferred Ctrl+LMB).
   // On Ctrl+LMB-down we don't know yet whether this is a lasso (drag)
   // or a click-time op (Edit Mode shortest-path-pick / Object-Mode
@@ -1236,6 +1239,21 @@ export default function CanvasViewport({
         // projectStore fan-out.
         const _byBoneMirror = useParamValuesStore.getState().boneMirror?.byBone;
         const _byParamMirror = useParamValuesStore.getState().boneMirror?.byParam;
+        // Diagnostic — log once-per-second when the registry is EMPTY so the
+        // "bones don't move the layers" failure mode is visible without
+        // requiring the user to dig through rigSpecStore logs.
+        if (!_byBoneMirror || _byBoneMirror.size === 0) {
+          const _now = timestamp;
+          if (_now - lastBoneMirrorEmptyLogTimestampRef.current > 5000) {
+            lastBoneMirrorEmptyLogTimestampRef.current = _now;
+            logger.warn('boneMirrorEval',
+              'BONE → PARAM mirror SKIPPED: registry empty (no bone → ParamRotation_* mapping). Bone rotation will not deform the mesh.',
+              {
+                boneMirrorByBoneSize: _byBoneMirror?.size ?? 0,
+                hint: 'Check rigSpecStore log for "setBoneMirrorRegistry: 0 entries" — it details why.',
+              });
+          }
+        }
         if (_byBoneMirror && _byBoneMirror.size > 0) {
           // Animation mode vs staging mode source priority:
           //   - Animation mode: ONLY mirror when poseOverrides carries an
