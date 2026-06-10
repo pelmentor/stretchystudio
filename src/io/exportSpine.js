@@ -194,23 +194,49 @@ function buildSpineJson(project) {
     const t = part.transform || {};
     const pos = getLocalSpineOffset(part);  // pivot offset relative to parent bone's pivot
 
-    const attachment = {
-      type: "region",
-      name: sanitizeName(part.name),
-      x: pos.x,
-      y: pos.y,
-      rotation: -requireFinite(t.rotation, 'rotation', part.name, 0),
-      width: part.imageWidth ?? canvasW,
-      height: part.imageHeight ?? canvasH,
-    };
-
     const partMesh = getMesh(part, project);
-    if (partMesh) {
-      attachment.type = "mesh";
-      attachment.vertices = partMesh.vertices;
-      attachment.uvs = partMesh.uvs;
-      attachment.triangles = partMesh.triangles;
-    }
+    /** @type {Record<string, any>} */
+    const attachment = partMesh
+      ? {
+          // Spine mesh attachment shape — see
+          // https://esotericsoftware.com/spine-json-format#mesh
+          // Required flat numeric arrays; the SS canonical mesh shape
+          // (`mesh/generate.js:39-45`) stores `vertices` as an object
+          // array `[{x,y,restX,restY,...}, ...]` and `triangles` as
+          // tuple arrays `[[a,b,c], ...]`. Flatten on the way out;
+          // `uvs` is already a flat Float32Array.
+          //
+          // Vertex space — SS verts are PSD canvas pixels (Y-down).
+          // Spine attachment-local space is Y-up. Mirror Y on output
+          // so the rendered geometry matches the orientation the
+          // bones / region attachments already convert through
+          // `getLocalSpineOffset`. The attachment's own x/y has
+          // already been computed in Spine space above; vertex
+          // coordinates ride on top of that placement.
+          type: 'mesh',
+          name: sanitizeName(part.name),
+          // `path` is optional; Spine resolves the slot's image by
+          // attachment name when omitted, and the images.zip writes
+          // each file as `<sanitizedName>.png` (see entry loop above).
+          vertices: flattenVerticesYDown(partMesh.vertices),
+          uvs: flattenUVs(partMesh.uvs),
+          triangles: flattenTriangles(partMesh.triangles),
+          hull: edgeHullCount(partMesh.edgeIndices),
+        }
+      : {
+          type: 'region',
+          name: sanitizeName(part.name),
+          x: pos.x,
+          y: pos.y,
+          rotation: -requireFinite(t.rotation, 'rotation', part.name, 0),
+          // Region needs the image's native size; fall back to a
+          // 1×1 placeholder rather than the canvas dims so the user
+          // sees an obviously-wrong region (1px square) instead of
+          // a UV-stretched full-canvas square that LOOKS plausible
+          // but renders mis-scaled.
+          width: requireFinite(part.imageWidth, 'imageWidth', part.name, 1),
+          height: requireFinite(part.imageHeight, 'imageHeight', part.name, 1),
+        };
 
     const slotKey = sanitizeName(part.name);
     if (!skinAttachments[slotKey]) skinAttachments[slotKey] = {};
@@ -324,6 +350,90 @@ function sanitizeName(name) {
     .replace(/_+/g, '_')
     .replace(/^_+|_+$/g, '');
   return s === 'root' ? 'rig_root' : s;
+}
+
+/**
+ * Flatten the SS canonical vertex array
+ * (`Array<{x, y, restX?, restY?, ...}>` per `mesh/generate.js`) into
+ * Spine's flat `[x0, y0, x1, y1, ...]`. Uses `restX/restY` when
+ * present (rest geometry — what the texture was painted against);
+ * falls back to live x/y for inline-only meshes.
+ *
+ * Y axis: SS is Y-down (PSD canvas), Spine attachment space is Y-up.
+ * Mirror Y so the rendered mesh orientation matches Spine's convention.
+ * The Y-flip is around the attachment's local origin (vertex 0,0 is
+ * unchanged in magnitude, only sign-flipped) — the per-attachment
+ * placement in slot space has already been handled when bones /
+ * regions computed `getLocalSpineOffset`.
+ *
+ * @param {Array<{x:number, y:number, restX?:number, restY?:number}>} verts
+ * @returns {number[]}
+ */
+function flattenVerticesYDown(verts) {
+  if (!Array.isArray(verts)) return [];
+  const out = new Array(verts.length * 2);
+  for (let i = 0; i < verts.length; i++) {
+    const v = verts[i];
+    const x = typeof v?.restX === 'number' ? v.restX : (v?.x ?? 0);
+    const y = typeof v?.restY === 'number' ? v.restY : (v?.y ?? 0);
+    out[i * 2]     = x;
+    out[i * 2 + 1] = -y;
+  }
+  return out;
+}
+
+/**
+ * Spine's UV array is `[u0, v0, u1, v1, ...]`. SS canonical UV shape
+ * IS the same flat layout (see `mesh/generate.js:42`: `uvs: Float32Array`,
+ * inline comment "flat [u0,v0, u1,v1, …] in [0,1]"); copy to a plain
+ * JS array for JSON-friendly output. If the input is already an
+ * Array we return it as-is (no copy) since JSON.stringify handles
+ * both shapes.
+ *
+ * @param {ArrayLike<number>|null|undefined} uvs
+ * @returns {number[]}
+ */
+function flattenUVs(uvs) {
+  if (!uvs) return [];
+  return Array.from(/** @type {any} */ (uvs));
+}
+
+/**
+ * Flatten SS canonical triangle tuples (`Array<[a, b, c]>`) into
+ * Spine's flat `[a0, b0, c0, a1, b1, c1, ...]`. Tolerates already-flat
+ * input (used by some edit-op outputs that pre-flattened).
+ *
+ * @param {ArrayLike<number|number[]>|null|undefined} tris
+ * @returns {number[]}
+ */
+function flattenTriangles(tris) {
+  if (!tris || /** @type {any} */ (tris).length === 0) return [];
+  /** @type {any} */
+  const first = /** @type {any} */ (tris)[0];
+  if (Array.isArray(first)) {
+    // [[a,b,c], ...] tuple form
+    const out = [];
+    for (const t of /** @type {any} */ (tris)) {
+      if (!t || t.length < 3) continue;
+      out.push(t[0], t[1], t[2]);
+    }
+    return out;
+  }
+  return Array.from(/** @type {any} */ (tris));
+}
+
+/**
+ * Spine mesh attachments carry a `hull` count — the number of leading
+ * vertices that form the outer boundary, used by the runtime to clip
+ * + render. SS tracks the boundary in `edgeIndices` (a Set); the count
+ * is enough for Spine. Returns 0 when no edges tracked (safe default,
+ * Spine treats as "no hull culling").
+ *
+ * @param {Set<number>|undefined|null} edgeIndices
+ */
+function edgeHullCount(edgeIndices) {
+  if (!edgeIndices || typeof edgeIndices.size !== 'number') return 0;
+  return edgeIndices.size;
 }
 
 function applySpineCurve(entry, kf) {

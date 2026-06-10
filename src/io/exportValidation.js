@@ -92,7 +92,14 @@ export function validateProjectForExport(project) {
         nodeId: p.id,
       });
     }
-    if (!pMesh.uvs || pMesh.uvs.length !== pMesh.vertices.length) {
+    // UVs are stored flat (`Float32Array` of `[u0,v0,u1,v1,...]`,
+    // per `mesh/generate.js:42`). Vertices are an object array
+    // (`Array<{x,y,...}>` of length N). So the correct comparison is
+    // `uvs.length !== verts.length * 2` — pre-fix this compared the
+    // flat-uv length directly against the object-vert length and
+    // fired for every meshed part (false positive flooded the export
+    // panel for every project).
+    if (!pMesh.uvs || pMesh.uvs.length !== pMesh.vertices.length * 2) {
       warnings.push({
         code: 'PART_UV_LENGTH',
         level: 'warning',
