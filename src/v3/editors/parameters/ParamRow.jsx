@@ -12,9 +12,13 @@
  * the bar drag-scrubs the value (Radix's slider supports
  * click-to-set + drag-to-scrub out of the box).
  *
- * A small leftmost dot indicates animation state:
- *   - green dot  ▎the param has an fcurve in the active action
- *   - dim dot    ▎no fcurve (Blender's "not animated" state)
+ * Animated state is shown via the slider track's BACKGROUND TINT —
+ * a subtle green wash + green-edged border when an fcurve targets the
+ * param in the active action. Mirrors Blender's property-field
+ * colour-coding (`UI_interface.hh`: yellow at-keyframe, green
+ * animated, purple driven) rather than a separate dot/badge. Edits
+ * to an animated slider auto-upsert a keyform at the current scrubber
+ * time (Blender's `only_if_keyed=true` default — see `onValueChange`).
  *
  * Press `I` while hovering the row to insert a keyframe at the current
  * scrubber time. Mirrors Blender's per-button I-key (UI keymap binds
@@ -80,20 +84,31 @@ function ParamRowImpl({ param, selected, isKeyed, hoveredParamIdRef }) {
       logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
     }
     setParamValue(param.id, v);
-    // Auto-keyframe in animation mode. This is Blender's UI-button
-    // auto-key path (`button_anim_autokey` → `autokeyframe_property`
-    // with `only_if_property_keyed=true`): a slider drag only
-    // MAINTAINS an existing param fcurve, never creates one, and is
-    // scoped to the touched param alone (NOT routed through
-    // `runAutoKey`/`project.autoKeyMode`). The first keyframe is
-    // inserted via the I-menu, the per-row I-key, or the AllParams
-    // keying set. See `autoKeyParamProperty`.
-    const ed = useEditorStore.getState();
-    if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
+    // Blender's `only_if_property_keyed=true` path
+    // (`button_anim_autokey` → `autokeyframe_property`): when the
+    // property is already ANIMATED, every edit upserts a keyform at the
+    // current time regardless of the global auto-key toggle. Without
+    // this, the depgraph's ANIMATION_TRACK_EVAL re-evaluates the fcurve
+    // on the next viewport tick and OVERWRITES the user's slider value
+    // — i.e. the slider feels frozen the moment the param gets keyed
+    // (user report 2026-06-10).
+    //
+    // For NOT-YET-animated params, the global auto-key toggle still
+    // gates fcurve creation — Blender's "create new fcurve" path is
+    // conservative on purpose (`only_if_keyed` prevents an idle slider
+    // wiggle from auto-animating a property).
+    if (getEditorMode() !== 'animation') return;
     const an = useAnimationStore.getState();
     const proj = useProjectStore.getState().project;
     const activeAction = getActiveSceneAction(proj, an.activeActionId);
-    if (!activeAction || !findParamFCurve(activeAction, param.id)) return;
+    if (!activeAction) return;
+    const isAnimated = !!findParamFCurve(activeAction, param.id);
+    if (!isAnimated) {
+      // First-keyframe path is reserved for autokey-ON OR the explicit
+      // I-key. Drop here when neither has fired.
+      const ed = useEditorStore.getState();
+      if (!ed.autoKeyframe) return;
+    }
     useProjectStore.getState().updateProject((p) => {
       const a = p.actions.find((aa) => aa.id === activeAction.id);
       if (a) autoKeyParamProperty(a, param.id, an.currentTime, v, 'ease-both');
@@ -149,24 +164,27 @@ function ParamRowImpl({ param, selected, isKeyed, hoveredParamIdRef }) {
         } : undefined}
         className="relative flex flex-1 h-6 items-center touch-none select-none"
       >
-        <SliderPrimitive.Track className="relative w-full h-full grow rounded-sm border border-border/60 bg-muted/40 overflow-hidden">
+        <SliderPrimitive.Track
+          className={
+            'relative w-full h-full grow rounded-sm border overflow-hidden ' +
+            // Animated-state indicator — Blender uses property field
+            // background TINT to mark animated/keyed properties (yellow
+            // at-keyframe, green animated, purple driven), NOT a
+            // separate dot. SS matches by tinting the track + edging
+            // the left border green when an fcurve exists. No glow,
+            // no extra glyph.
+            (isKeyed
+              ? 'border-emerald-500/50 bg-emerald-900/15'
+              : 'border-border/60 bg-muted/40')
+          }
+        >
           {/* Fill bar — Blender's BUT_TYPE_NUMSLI fill colour, SS
               substitutes a translucent primary. */}
           <SliderPrimitive.Range className="absolute inset-y-0 left-0 bg-primary/35" />
-          {/* Animated-state dot. Bright when the active action has an
-              fcurve for this param. `pointer-events-none` so it never
-              eats slider clicks. */}
-          <span
-            className={
-              'absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full pointer-events-none ' +
-              (isKeyed ? 'bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.55)]' : 'bg-muted-foreground/30')
-            }
-            aria-hidden="true"
-          />
           {/* Name + value overlay. The text container is
               pointer-events-none so the entire bar drags as one
               unit. textShadow keeps labels legible over the fill. */}
-          <div className="absolute inset-0 flex items-center pl-4 pr-2 gap-2 text-[11px] pointer-events-none">
+          <div className="absolute inset-0 flex items-center px-2 gap-2 text-[11px] pointer-events-none">
             <span
               className="flex-1 truncate font-medium text-foreground/95"
               style={{ textShadow: '0 0 2px rgba(0,0,0,0.75)' }}
