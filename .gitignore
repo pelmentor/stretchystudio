@@ -54,6 +54,8 @@ __pycache__/
 # Export artifacts (SS dev testing output, not source)
 *.rig.log.json
 *_live2d*.zip
+*_cmo3.zip
+*_cmo3/
 girl.png
 waifu.png
 shelby*.png
@@ -61,6 +63,24 @@ shelby*.can3
 *.can3
 *.blend
 *.blend1
+
+# Editor scratch — backup / partial-save files Claude Code / VS Code
+# emit alongside source files. The `.bak` extension is common across
+# both; `.jsx.test` and `.jsx.tmp` showed up in past sweeps too.
+*.bak
+*.jsx.bak
+*.jsx.test
+*.jsx.tmp
+*.js.bak
+
+# Throwaway debug scripts that occasionally end up at repo root or in
+# scripts/test/ during diagnostic sessions. Real test files live under
+# scripts/test/ with descriptive names (`test_animationEngine.mjs`
+# etc.); these patterns ignore the temp-naming convention.
+/test_*.js
+/test_*.mjs
+scripts/test/test_buildLocalMat3_reachable*.mjs
+scripts/test/test_line_*.mjs
 
 # Cubism Editor "Export For Runtime" output — generated, not source.
 # Catches the model_live2d/ directory pattern + bare runtime files.
