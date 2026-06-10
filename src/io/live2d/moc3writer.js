@@ -129,6 +129,12 @@ function buildSectionData(input) {
     jointBoneId: n.mesh?.jointBoneId ?? null,
     boneWeights: n.mesh?.boneWeights ?? null,
   }));
+  // PP2-005 audit-fix I1 (2026-06-11) — pass subsystems through so
+  // a fresh PSD export (never Init-Rigged → `project.parameters = []`,
+  // generator path fires) honours `autoRigConfig.subsystems` opt-out.
+  // Without this, an opted-out hair / clothing subsystem still emits
+  // its bone-rotation params on direct export. `seedParameters`
+  // already does this same read; the writer needs parity.
   const params = buildParameterSpec({
     baseParameters: project.parameters ?? [],
     meshes: meshesForSpec,
@@ -136,6 +142,7 @@ function buildSectionData(input) {
     generateRig,
     bakedKeyformAngles,
     rotationDeformerConfig,
+    subsystems: project?.autoRigConfig?.subsystems ?? null,
   });
 
   // Build Part ID → index map

@@ -328,6 +328,12 @@ export async function generateCmo3(input) {
   const _globals = setupGlobalSharedObjects(x, {
     parameters, meshes, groups,
     generateRig, bakedKeyformAngles, rotationDeformerConfig,
+    // PP2-005 audit-fix I1 (2026-06-11) — thread subsystems through
+    // so cmo3 export honours opt-out flags on fresh / never-Init-
+    // Rigged projects (sister fix to moc3writer.js:140).
+    // `autoRigConfig` is already destructured from the input arg
+    // above (line 148) so this reads from the caller's payload.
+    subsystems: autoRigConfig?.subsystems ?? null,
   });
   attachGlobals(ctx, _globals);
   const {

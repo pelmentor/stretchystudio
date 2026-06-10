@@ -1187,7 +1187,20 @@ export default function CanvasViewport({
           if (_boneMirror && _boneMirror.size > 0) {
             for (const [paramId, boneId] of _boneMirror) {
               const v = valuesForEval[paramId];
-              if (typeof v !== 'number' || !Number.isFinite(v) || v === 0) continue;
+              // Audit C1 (2026-06-11) — keep the finite-number guard
+              // but DROP the `v === 0` short-circuit. The previous
+              // skip was safe in preview-only mode because the
+              // downstream BONE → PARAM mirror always fell back to
+              // `bone.pose.rotation`. In staging mode it broke the
+              // slider-back-to-rest behaviour: user drags slider to
+              // 45°, commits a pose gesture, then drags the slider
+              // back to 0°. PARAM → BONE skipped on the zero, BONE
+              // → PARAM read the committed `bone.pose.rotation = 45`
+              // from projectStore, slider at 0 was overridden, mesh
+              // stayed deformed. Writing `{rotation: 0}` into
+              // `poseOverrides` is harmless and lets the slider
+              // explicitly return to rest.
+              if (typeof v !== 'number' || !Number.isFinite(v)) continue;
               if (!poseOverrides) poseOverrides = new Map();
               const existing = poseOverrides.get(boneId);
               if (existing && typeof existing === 'object' && 'rotation' in existing) continue;

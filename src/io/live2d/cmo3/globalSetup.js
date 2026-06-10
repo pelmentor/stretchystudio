@@ -95,10 +95,17 @@ import { buildParameterSpec } from '../rig/paramSpec.js';
  * @param {boolean} opts.generateRig
  * @param {number[]} opts.bakedKeyformAngles
  * @param {Object} opts.rotationDeformerConfig
+ * @param {Object|null} [opts.subsystems]  PP2-005 subsystem opt-out
+ *   flags. When non-null, buildParameterSpec drops hair/clothing
+ *   accessory params and bone-rotation params for matching named
+ *   bones. Passed through from cmo3writer's caller (typically
+ *   `project.autoRigConfig.subsystems`). Optional for back-compat
+ *   with callers that don't pass it; matches `seedParameters`'s
+ *   read of the same field.
  * @returns {GlobalSharedSetup}
  */
 export function setupGlobalSharedObjects(x, opts) {
-  const { parameters, meshes, groups, generateRig, bakedKeyformAngles, rotationDeformerConfig } = opts;
+  const { parameters, meshes, groups, generateRig, bakedKeyformAngles, rotationDeformerConfig, subsystems = null } = opts;
 
   // ── Core GUIDs ────────────────────────────────────────────────────
   // Root parameter group uses a well-known UUID hardcoded in the Editor
@@ -131,6 +138,12 @@ export function setupGlobalSharedObjects(x, opts) {
   x.sub(coordType, 's', { 'xs.n': 'coordName' }).text = 'DeformerLocal';
 
   // ── Param-derived state ──────────────────────────────────────────
+  // PP2-005 audit-fix I1 (2026-06-11) — `subsystems` is threaded
+  // through `opts` so direct cmo3 export honours opt-out flags on
+  // fresh / never-Init-Rigged projects. Without this, an opted-out
+  // hairRig/clothingRig still emits its bone-rotation params on the
+  // generator path. `seedParameters` reads the same flag from
+  // `project.autoRigConfig.subsystems`; the writer needs parity.
   const paramSpecs = buildParameterSpec({
     baseParameters: parameters,
     meshes,
@@ -138,6 +151,7 @@ export function setupGlobalSharedObjects(x, opts) {
     generateRig,
     bakedKeyformAngles,
     rotationDeformerConfig,
+    subsystems,
   });
 
   // Materialise paramDefs by attaching the cmo3-specific XML pid to

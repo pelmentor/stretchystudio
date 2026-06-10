@@ -2447,7 +2447,18 @@ function registerBuiltins() {
         .join(', ');
       toast({
         title: 'Auto-Skin Unwired Bones',
-        description: `Skinned ${summary.partsAssigned} of ${summary.partsScanned} parts — ${top}${byBoneEntries.length > 4 ? '…' : ''}. Click Initialize Rig to register the new ParamRotation_<bone> params.`,
+        // 2026-06-11 audit-fix I4 — Init Rig now generates
+        // ParamRotation_<bone> for EVERY bone with boneRole (paramSpec
+        // second pass added in cbce63f), not just bones with weighted
+        // meshes. So the param entries already exist post-Init-Rig
+        // regardless of whether this operator runs. The remaining
+        // benefit of running Init Rig after auto-skin is rebuilding
+        // the modifier stacks: synthesizeModifierStacks appends the
+        // Armature modifier when a mesh has both jointBoneId AND
+        // boneWeights, which is what makes pickBonePostChainComposition
+        // return 'lbs'. Without the rebuild, parts stay on the overlay
+        // path.
+        description: `Skinned ${summary.partsAssigned} of ${summary.partsScanned} parts — ${top}${byBoneEntries.length > 4 ? '…' : ''}. Click Initialize Rig to rebuild the modifier stacks (adds Armature modifier per LBS-bound part).`,
       });
     },
   });
