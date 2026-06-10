@@ -31,7 +31,7 @@ import { RadioGroup, RadioGroupItem } from '../../components/ui/radio-group.jsx'
 import { Label } from '../../components/ui/label.jsx';
 import {
   Loader2, Download, Box, Layers, Bone, Film, Image as ImageIcon, Activity,
-  AlertTriangle, AlertCircle, CheckCircle2,
+  AlertTriangle, AlertCircle, CheckCircle2, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
@@ -401,7 +401,12 @@ export function ExportModal() {
           label: `${spec.animName} — frame ${spec.frameIndex + 1} / ${specs.length}`,
         });
         const dataUrl = captureFrame({
-          animId: spec.animId,
+          // captureExportFrame destructures `actionId`, not `animId`.
+          // Pre-fix the mismatch made `actionId` undefined inside the
+          // capture function → `poseOverrides` stayed null → every
+          // exported PNG showed the rest pose (user report 2026-06-10:
+          // "PNG export animation — all frames are the same").
+          actionId: spec.animId,
           timeMs: spec.timeMs,
           bgEnabled: bgMode === 'custom',
           bgColor,
@@ -721,13 +726,21 @@ function ValidationPanel({ result, override, onOverrideChange }) {
     );
   }
 
+  // Group by code so repeated warnings (e.g. PART_UV_LENGTH across 23
+  // variant parts) collapse into a single row with a "+22 more"
+  // disclosure. Errors stay ungrouped — there are typically few of
+  // them and each demands attention.
+  const warningGroups = useMemo(() => groupIssuesByCode(warnings), [warnings]);
+
+  const onJump = (id) => select({ type: 'part', id }, 'replace');
+
   return (
     <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-1">
       {errors.map((iss, i) => (
-        <IssueRow key={`e${i}`} issue={iss} onJump={(id) => select({ type: 'part', id }, 'replace')} />
+        <IssueRow key={`e${i}`} issue={iss} onJump={onJump} />
       ))}
-      {warnings.map((iss, i) => (
-        <IssueRow key={`w${i}`} issue={iss} onJump={(id) => select({ type: 'part', id }, 'replace')} />
+      {warningGroups.map((group, i) => (
+        <IssueGroupRow key={`wg${i}`} group={group} onJump={onJump} />
       ))}
 
       {errors.length > 0 ? (
@@ -743,6 +756,29 @@ function ValidationPanel({ result, override, onOverrideChange }) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * Group a flat list of issues by `code`. Preserves the original order
+ * of first-occurrence per group. Returns one group per distinct code,
+ * each carrying the FIRST issue (representative for the panel) + the
+ * full list of items.
+ *
+ * @param {Array<{code:string, level:string, message:string, nodeId?:string}>} issues
+ */
+function groupIssuesByCode(issues) {
+  /** @type {Map<string, {code:string, level:string, items:Array<any>}>} */
+  const byCode = new Map();
+  for (const iss of issues) {
+    const k = iss.code ?? '__nocode__';
+    let g = byCode.get(k);
+    if (!g) {
+      g = { code: k, level: iss.level, items: [] };
+      byCode.set(k, g);
+    }
+    g.items.push(iss);
+  }
+  return [...byCode.values()];
 }
 
 function IssueRow({ issue, onJump }) {
@@ -769,6 +805,75 @@ function IssueRow({ issue, onJump }) {
         <div className="text-[10px] opacity-60 font-mono mt-0.5">{issue.code}</div>
       </div>
     </button>
+  );
+}
+
+/**
+ * Collapsible group row for repeated warnings under the same code.
+ * Shows the first item's message + a "+N more" toggle when the group
+ * has multiple items. Expanded state reveals every node name in a
+ * compact list, each click-to-jump just like a flat row.
+ *
+ * @param {{
+ *   group: { code: string, level: string, items: Array<{message:string,nodeId?:string}> },
+ *   onJump: (id: string) => void,
+ * }} props
+ */
+function IssueGroupRow({ group, onJump }) {
+  const [expanded, setExpanded] = useState(false);
+  const { code, level, items } = group;
+  const head = items[0];
+  const rest = items.length - 1;
+  const isError = level === 'error';
+  const Icon = isError ? AlertCircle : AlertTriangle;
+  const tone = isError
+    ? 'text-destructive border-destructive/30 bg-destructive/5'
+    : 'text-amber-700 dark:text-amber-500 border-amber-500/30 bg-amber-500/5';
+
+  if (rest === 0) {
+    // Single-item group — render as a plain IssueRow.
+    return <IssueRow issue={head} onJump={onJump} />;
+  }
+
+  return (
+    <div className={`text-xs border rounded ${tone}`}>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-start gap-2 p-2 text-left"
+      >
+        <Icon size={14} className="shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[10px] opacity-70">{code}</span>
+            <span className="font-medium">× {items.length}</span>
+          </div>
+          <div className="mt-0.5 opacity-90">{head.message}</div>
+        </div>
+        {expanded
+          ? <ChevronDown size={14} className="shrink-0 mt-0.5 opacity-70" />
+          : <ChevronRight size={14} className="shrink-0 mt-0.5 opacity-70" />}
+      </button>
+      {expanded ? (
+        <div className="border-t border-current/10 px-2 pb-2 pt-1 flex flex-col gap-0.5">
+          {items.map((iss, i) => (
+            <button
+              key={`${code}-${i}`}
+              type="button"
+              onClick={() => iss.nodeId && onJump(iss.nodeId)}
+              disabled={!iss.nodeId}
+              className={
+                'text-left text-[11px] py-0.5 px-1 rounded ' +
+                (iss.nodeId ? 'hover:bg-current/10 cursor-pointer' : 'cursor-default opacity-70')
+              }
+              title={iss.nodeId ? 'Click to select the offending node' : undefined}
+            >
+              {iss.message}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

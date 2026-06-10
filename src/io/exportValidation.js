@@ -54,6 +54,15 @@ export function validateProjectForExport(project) {
   const nodes = Array.isArray(project.nodes) ? project.nodes : [];
   const parts = nodes.filter((n) => n?.type === 'part');
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  // Texture id index — used by the per-part texture check to detect
+  // the exporter's part.id→image fallback (see live2d/exporter.js:474:
+  // `texId = part.textureId ?? part.id; images.get(texId) ?? images.get(part.id)`).
+  // If `project.textures` carries an entry with id == part.id the
+  // exporter resolves the image cleanly even without an explicit
+  // `textureId` binding, so `PART_NO_TEXTURE` for such parts is noise.
+  const textureIdSet = new Set(
+    (Array.isArray(project.textures) ? project.textures : []).map((t) => t?.id).filter((id) => typeof id === 'string'),
+  );
 
   if (parts.length === 0) {
     errors.push({
@@ -91,7 +100,11 @@ export function validateProjectForExport(project) {
         nodeId: p.id,
       });
     }
-    if (!p.textureId && !pMesh.textureId) {
+    if (!p.textureId && !pMesh.textureId && !textureIdSet.has(p.id)) {
+      // Only warn when none of the three resolution paths work — pre-fix
+      // this fired for every PSD-imported part whose image is keyed by
+      // its own id (the exporter's standard fallback), creating dozens
+      // of false positives per project. See `live2d/exporter.js:474`.
       warnings.push({
         code: 'PART_NO_TEXTURE',
         level: 'warning',
