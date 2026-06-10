@@ -1956,6 +1956,7 @@ export function TimelineEditor() {
   return (
     <div
       className="flex flex-col h-full select-none text-xs"
+      data-editor-type="timeline"
       onPointerEnter={() => { hoverRef.current = true; }}
       onPointerLeave={() => { hoverRef.current = false; }}
     >

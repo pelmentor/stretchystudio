@@ -1295,6 +1295,7 @@ export function DopesheetEditor() {
   return (
     <div
       className="flex flex-col h-full bg-card overflow-hidden"
+      data-editor-type="dopesheet"
       onPointerEnter={() => { hoverRef.current = true; }}
       onPointerLeave={() => { hoverRef.current = false; }}
     >

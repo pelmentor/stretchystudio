@@ -89,7 +89,10 @@ export function CanvasArea({ mode }) {
   const showRotationPivots = useEditorStore((s) => s.viewLayers.rotationPivots);
 
   return (
-    <div className="h-full w-full relative">
+    // `data-editor-type="viewport"` lets chord-fired operators
+    // (selection.boxSelect / B) gate availability on what the cursor is
+    // over. See `hoveredEditorType()` in `v3/operators/registry.js`.
+    <div className="h-full w-full relative" data-editor-type="viewport">
       <CanvasViewport
         previewMode={isPreview}
         remeshRef={remeshRef}

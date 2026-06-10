@@ -1043,14 +1043,29 @@ function registerBuiltins() {
   // partId, captured at activation so a mode-switch mid-drag doesn't
   // redirect the eventual commit).
   //
-  // Available from any context — Blender's `B` works in Object Mode
-  // (selects parts), Edit Mode (selects verts), and even Pose Mode
-  // (selects bones; not implemented in this phase). When no editor
-  // can consume the selection, the overlay no-ops on commit.
+  // Hover-gated: only fires when the cursor is over the canvas
+  // viewport (`data-editor-type="viewport"`). Blender achieves this via
+  // per-space keymaps — its B-key is bound separately in `view3d`,
+  // `action`, `time`, `graph`, `nla`, etc. SS uses a single global
+  // dispatcher, so we gate at `available()` time using the
+  // `hoveredEditorType()` helper: pressing B over the Timeline /
+  // Dopesheet / FCurve / Parameters panels falls through without
+  // engaging the viewport box-select (pre-fix it bled through, selecting
+  // parts hidden behind those panels — user report 2026-06-10).
+  // Selections that live OUTSIDE the canvas (timeline keyframes,
+  // dopesheet keyframes) get their own box-select via mouse-drag in
+  // those editors — see TimelineEditor's `onTrackAreaPointerDown`.
   registerOperator({
     id: 'selection.boxSelect',
     label: 'Box Select (B)',
-    available: () => true,
+    available: () => {
+      const t = hoveredEditorType();
+      // Null = unannotated area (popovers, app shell margins) — allow
+      // through, matches the pre-fix "always available" path for those
+      // edge cases. The blockers we care about (timeline / dopesheet /
+      // fcurve / nla / parameters / outliner) are all annotated.
+      return t === null || t === 'viewport';
+    },
     exec: () => {
       const editor = useEditorStore.getState();
       const isEditModeOnPart = editor.editMode === 'edit'
@@ -2347,6 +2362,31 @@ if (typeof window !== 'undefined') {
 }
 function lastMousePos() {
   return { ..._lastMouse };
+}
+
+/**
+ * Find the editor type the cursor is currently over by walking up from
+ * `document.elementFromPoint(lastMouse)` to the closest ancestor with a
+ * `data-editor-type` attribute. Returns `null` when the cursor isn't
+ * over any annotated editor (e.g. over a popover, app shell chrome, or
+ * an editor that hasn't been tagged yet).
+ *
+ * Used by chord-fired operators that should only be available when
+ * the cursor is over a specific editor — Blender mirrors this via its
+ * per-space keymaps (the B-key in the 3D View runs `view3d.select_box`,
+ * in the Action Editor runs `action.select_box`, etc.). SS uses a
+ * single global dispatcher, so we gate at `available()` time instead
+ * of branching keymaps; same end-user behaviour.
+ *
+ * @returns {string|null}
+ */
+function hoveredEditorType() {
+  if (typeof document === 'undefined') return null;
+  const el = document.elementFromPoint(_lastMouse.x, _lastMouse.y);
+  if (!el) return null;
+  const tagged = el.closest('[data-editor-type]');
+  if (!tagged) return null;
+  return tagged.getAttribute('data-editor-type');
 }
 
 /**

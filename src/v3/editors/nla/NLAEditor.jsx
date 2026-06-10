@@ -1660,6 +1660,7 @@ export function NLAEditor() {
     <div
       ref={setContainerRef}
       className="flex flex-col h-full bg-zinc-950 text-zinc-300 overflow-auto"
+      data-editor-type="nla"
     >
       <div
         className="flex items-center border-b border-zinc-700 bg-zinc-900 text-[10px] text-zinc-500 sticky top-0 z-10"

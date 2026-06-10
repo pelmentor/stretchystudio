@@ -307,7 +307,7 @@ export function OutlinerEditor() {
   );
 
   return (
-    <div className="h-full w-full flex flex-col text-xs">
+    <div className="h-full w-full flex flex-col text-xs" data-editor-type="outliner">
       {rows.length === 0 ? (
         <EmptyState mode={mode} hasNodes={nodes.length > 0} hasRigSpec={!!rigSpec} hasArmature={hasArmature} hasQuery={!!query.trim()} />
       ) : (

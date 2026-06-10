@@ -556,7 +556,7 @@ export function FCurveEditor() {
 
 function Wrapper({ children, footer = null }) {
   return (
-    <div className="flex flex-col h-full bg-card overflow-hidden">
+    <div className="flex flex-col h-full bg-card overflow-hidden" data-editor-type="fcurve">
       <div className="flex-1 overflow-hidden">{children}</div>
       {footer}
     </div>

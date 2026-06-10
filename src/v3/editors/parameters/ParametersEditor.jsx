@@ -267,7 +267,7 @@ export function ParametersEditor() {
   }
 
   return (
-    <div className="h-full w-full flex flex-col">
+    <div className="h-full w-full flex flex-col" data-editor-type="parameters">
       {/* Toolbar — proper visual hierarchy. Init Rig is the primary
           action (filled button); add / generate idle / reset are
           secondary icon-buttons with surfaces visible at rest. The
