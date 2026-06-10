@@ -270,6 +270,52 @@ export function WeightPaintOverlay() {
   }
 
   function handlePointerDown(e) {
+    // MMB / RMB / Alt+LMB / Ctrl+MMB / Ctrl+RMB → viewport pan/zoom.
+    // The SVG overlay sits on top of the WebGL canvas with
+    // `pointer-events: auto`, so it captures pointer events before
+    // CanvasViewport's `onPointerDown` can see them. Without
+    // forwarding, MMB-drag in Weight Paint just no-ops (the SVG eats
+    // the down event, the canvas never enters pan mode). Forward by
+    // dispatching a synthetic `pointerdown` on the canvas — its
+    // handler reads the same button/clientX/clientY contract and
+    // calls `canvas.setPointerCapture(e.pointerId)`. Pointer capture
+    // wins over hit-testing, so every subsequent pointermove /
+    // pointerup for THIS pointer flows directly to the canvas, not
+    // the SVG. The user finishes their pan, releases the button,
+    // returns to LMB-paint with no state cleanup required.
+    //
+    // Mirrors CanvasViewport's `onPointerDown` button gate
+    // (`e.button === 1 || e.button === 2 || (e.button === 0 && e.altKey)`).
+    if (e.button !== 0 || e.altKey) {
+      /** @type {SVGSVGElement} */
+      const svg = e.currentTarget;
+      const wrap = svg.closest('[data-editor-type="viewport"]');
+      /** @type {HTMLCanvasElement|null} */
+      const canvas = wrap?.querySelector('canvas') ?? null;
+      if (canvas) {
+        canvas.dispatchEvent(new PointerEvent('pointerdown', {
+          button: e.button,
+          buttons: e.buttons,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          screenX: e.screenX,
+          screenY: e.screenY,
+          ctrlKey: e.ctrlKey,
+          altKey: e.altKey,
+          shiftKey: e.shiftKey,
+          metaKey: e.metaKey,
+          bubbles: true,
+          cancelable: true,
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          isPrimary: e.isPrimary,
+          pressure: e.pressure,
+        }));
+      }
+      // Don't preventDefault, don't setPointerCapture, don't enter
+      // paint mode — the canvas now owns this pointer.
+      return;
+    }
     if (dragRef.current) return;
     e.preventDefault();
     /** @type {SVGSVGElement} */

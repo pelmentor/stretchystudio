@@ -853,14 +853,66 @@ export const useProjectStore = create((set, get) => {
    * Used as the first step of entering weight paint mode (so the
    * brush has something to paint into) and by `setActiveWeightGroup`
    * before swapping the active.
+   *
+   * **2026-06-11 — auto-binds unweighted parts to nearest bone on
+   * Weight Paint entry.** Pre-fix `ensureWeightGroups` would create a
+   * placeholder group named `'group'` for parts with no `jointBoneId`
+   * — useless for painting because there's no bone to drive. The
+   * Weight Paint mode-row gated on `hasWeights` to hide this case,
+   * which meant the user couldn't enter Weight Paint on the
+   * majority of parts (topwear, neck, shoulder etc. — anything the
+   * wizard's `assignRigidSkinningToPart` skipped due to bone
+   * ancestor presence). Mirrors Blender's "Parent → Armature Deform
+   * with Automatic Weights" semantic: entering Weight Paint on an
+   * unbound mesh IS the explicit user trigger to bind it, so we run
+   * the closest-bone heuristic in-line. Preferred bone is the
+   * ancestor in the parent chain (Blender's "stay under the bone
+   * the user assigned you to"), falling back to nearest-by-pivot
+   * when no ancestor exists. Weights start at zero so the user is
+   * the one who decides which vertices follow the bone — no surprise
+   * rigid skinning.
    */
   ensureWeightGroupsForPart: async (partId) => {
     const peers = await loadRigPeers();
+    const { assignRigidSkinningToPart } = await import('../io/live2d/rig/autoSkinning.js');
     set(produce((state) => {
       state.hasUnsavedChanges = true;
       const node = state.project.nodes.find((n) => n?.id === partId);
       const mesh = getMesh(node, state.project);
       if (!mesh) return;
+      // Auto-bind: if the part has no jointBoneId AND no boneWeights,
+      // call the autoSkin helper in force-LBS mode so the new group
+      // takes the bone's name (not the placeholder 'group'). Weights
+      // come back as rigid 1.0 — we re-zero them BEFORE
+      // ensureWeightGroups migrates so the user starts with a clean
+      // canvas. The jointBoneId binding survives → the new group is
+      // named after the ancestor bone, the synthesizeModifierStacks
+      // pass on the next Init Rig adds the armature modifier, and
+      // the bone-skin chain is wired end-to-end.
+      const haveModernGroups = mesh.weightGroups
+        && typeof mesh.weightGroups === 'object'
+        && !Array.isArray(mesh.weightGroups)
+        && Object.keys(mesh.weightGroups).length > 0;
+      const haveLegacyWeights = Array.isArray(mesh.boneWeights) && mesh.boneWeights.length > 0;
+      const haveJointBoneId = typeof mesh.jointBoneId === 'string' && mesh.jointBoneId.length > 0;
+      if (!haveModernGroups && !haveLegacyWeights && !haveJointBoneId) {
+        const assigned = assignRigidSkinningToPart(
+          node,
+          state.project,
+          null,
+          { includeBoneAncestor: true },
+        );
+        if (assigned) {
+          // Re-zero the rigid-1.0 weights so the user paints from a
+          // clean slate. The binding (jointBoneId) survives so
+          // ensureWeightGroups names the group after the bone.
+          if (Array.isArray(mesh.boneWeights)) {
+            for (let i = 0; i < mesh.boneWeights.length; i++) {
+              mesh.boneWeights[i] = 0;
+            }
+          }
+        }
+      }
       const boneGroups = state.project.nodes.filter((n) => n?.type === 'group');
       if (peers.ensureWeightGroups(mesh, boneGroups)) {
         peers.syncBoneWeightsFromActive(mesh, boneGroups);

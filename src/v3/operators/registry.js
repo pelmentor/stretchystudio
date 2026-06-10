@@ -998,15 +998,15 @@ function registerBuiltins() {
         // so this branch is unreachable; kept for future dataKinds.
         if (!ed.viewLayers.skeleton) ed.setViewLayers({ skeleton: true });
         ed.enterEditMode(MODE_POSE);
-      } else if (modeCompatTest(dataKind, MODE_WEIGHT_PAINT)
-                 && (mesh?.boneWeights || mesh?.jointBoneId
-                     || (mesh?.weightGroups && Object.keys(mesh.weightGroups).length > 0))) {
-        // V4 Phase 4b — Tab on a weight-bound part with no mesh data falls
-        // here only when the mesh edit branch above was rejected. The primary
-        // entry point for weight paint is the Vertex Groups section's "Edit
-        // Weights" button; Tab with mesh+weights still enters mesh edit per
-        // the branch above (Blender's one-mode-per-Tab pattern, dedicated
-        // cycle for Weight Paint).
+      } else if (modeCompatTest(dataKind, MODE_WEIGHT_PAINT)) {
+        // V4 Phase 4b — Tab on a meshed part where the Edit branch
+        // above was rejected (no mesh data yet). 2026-06-11: the
+        // weights-presence gate was dropped here too so unweighted
+        // parts can still reach Weight Paint via Tab; the inner
+        // `ensureWeightGroupsForPart` action auto-binds to the
+        // nearest bone via the closest-bone heuristic, so the user
+        // doesn't need to manually bind first. Matches Blender's
+        // "Parent → Armature Deform with Automatic Weights" semantic.
         useEditorStore.getState().setSelection([active.id]);
         useProjectStore.getState().ensureWeightGroupsForPart(active.id);
         ed.enterEditMode('weightPaint');

@@ -301,13 +301,13 @@ export function ModePill() {
           icon={Brush}
           label="Weight Paint"
           checked={editMode === 'weightPaint'}
-          disabled={!modeCompatTest(dataKind, MODE_WEIGHT_PAINT) || !hasWeights}
+          disabled={!modeCompatTest(dataKind, MODE_WEIGHT_PAINT)}
           hint={
             kind !== 'meshedPart'
               ? 'Select a meshed part to paint weights'
-              : !hasWeights
-                ? 'This mesh has no bone-binding yet (auto-rig sets it on handwear / arm parts; manual binding lands in a follow-up)'
-                : 'Paint per-vertex weights for the active vertex group'
+              : hasWeights
+                ? 'Paint per-vertex weights for the active vertex group'
+                : 'Enter Weight Paint mode (auto-binds the part to its ancestor bone — or the nearest bone — and seeds a zero-fill vertex group to paint into)'
           }
           onSelect={pick(enterWeightPaint)}
         />
