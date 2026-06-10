@@ -239,7 +239,7 @@ export function FileMenu({ onOpenPreferences }) {
           className="gap-2"
         >
           <Download className="h-4 w-4" />
-          Export Live2D…
+          Export…
           <DropdownMenuShortcut>Ctrl+E</DropdownMenuShortcut>
         </DropdownMenuItem>
 

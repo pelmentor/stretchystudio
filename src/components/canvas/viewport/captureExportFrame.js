@@ -20,7 +20,8 @@
  * @module components/canvas/viewport/captureExportFrame
  */
 
-import { computePoseOverrides } from '../../../renderer/animationEngine.js';
+import { computePoseOverrides, computeParamOverrides } from '../../../renderer/animationEngine.js';
+import { evalProjectFrameViaDepgraph } from '../../../anim/depgraph/evalProjectFrame.js';
 import { getMesh } from '../../../store/objectDataAccess.js';
 
 /**
@@ -106,14 +107,51 @@ export function captureExportFrame(ctx, opts) {
     canvas: { ...project.canvas, bgEnabled: false },
   };
 
-  // Compute pose at timeMs (animation playback) and bake blend-shape
-  // deformations into mesh_verts so the GPU sees the right vertices.
+  // Compute pose + param overrides at timeMs (animation playback) and
+  // bake every art mesh's deformed vertices via the depgraph.
+  //
+  // Pre-fix this path only computed `computePoseOverrides` (which
+  // walks node-targeted fcurves — bone rotation, slot opacity, etc.).
+  // Param-targeted fcurves (which drive Live2D's per-param warp grids
+  // — i.e. EVERY procedural motion: idle, look-*, embarrassed, etc.)
+  // were silently skipped, so PNG sequence exports of param-driven
+  // motions came out as identical rest-pose frames (user report
+  // 2026-06-10).
+  //
+  // Mirrors CanvasViewport's live tick at `CanvasViewport.jsx:773-799`
+  // + `:1252` — `computeParamOverrides` populates the param values
+  // for the action at this time, then `evalProjectFrameViaDepgraph`
+  // runs every kernel (TRANSFORM_COMPOSE, ART_MESH_EVAL, …) to
+  // produce final per-part vertex positions. Mesh blend-shape bake
+  // still happens here for the rare blendShape-driven case the
+  // depgraph doesn't cover yet.
   /** @type {Map<string, any>|null} */
   let poseOverrides = null;
+  /** @type {Record<string, number>} */
+  let paramValuesForEval = {};
+  /** @type {any} */
+  let actionForEval = null;
   if (actionId) {
     const action = exportProject.actions.find((a) => a.id === actionId);
     if (action) {
-      poseOverrides = computePoseOverrides(action, timeMs, loopKeyframes, action.duration ?? 0);
+      actionForEval = action;
+      const endMs = action.duration ?? 0;
+      poseOverrides = computePoseOverrides(action, timeMs, loopKeyframes, endMs);
+
+      // Seed paramValues: project defaults → action's param fcurves
+      // override at timeMs. The depgraph's ANIMATION_TRACK_EVAL also
+      // walks the action internally, but pre-seeding ensures dependent
+      // chain inputs (e.g. driver formulas reading other params) read
+      // the animated values consistently.
+      for (const p of exportProject.parameters ?? []) {
+        if (p && typeof p.id === 'string' && typeof p.default === 'number') {
+          paramValuesForEval[p.id] = p.default;
+        }
+      }
+      const paramOv = computeParamOverrides(action, timeMs, loopKeyframes, endMs);
+      for (const [pid, v] of paramOv) {
+        if (Number.isFinite(v)) paramValuesForEval[pid] = v;
+      }
 
       for (const node of exportProject.nodes) {
         const mesh = getMesh(node, exportProject);
@@ -152,10 +190,41 @@ export function captureExportFrame(ctx, opts) {
     }
   }
 
-  // Upload deformed mesh verts to GPU before rendering, remember
-  // which parts we touched so we can restore them after capture.
+  // Depgraph eval — produces per-part `vertexPositions` arrays after
+  // every warp / rotation / bone-driven deformer has run with the
+  // animated param values. We upload these to the GPU instead of (or
+  // in addition to) the blend-shape baked verts above.
   /** @type {string[]} */
   const exportMeshOverridden = [];
+  if (actionForEval) {
+    let frames = [];
+    try {
+      frames = evalProjectFrameViaDepgraph(exportProject, paramValuesForEval, {
+        action: actionForEval,
+        timeMs,
+        poseOverrides: poseOverrides ?? undefined,
+      });
+    } catch (err) {
+      // Depgraph throws on malformed input — we'd rather export a
+      // rest-pose frame than crash the whole sequence. Logged via
+      // console so the failure is visible in DevTools without
+      // toasting the user on every frame.
+      console.error('[captureExportFrame] depgraph eval failed:', err);
+      frames = [];
+    }
+    for (const frame of frames) {
+      if (!frame?.id || !frame.vertexPositions) continue;
+      const node = exportProject.nodes.find((n) => n.id === frame.id);
+      const m = getMesh(node, exportProject);
+      if (!m) continue;
+      scene.parts.uploadPositions(frame.id, frame.vertexPositions, new Float32Array(m.uvs));
+      exportMeshOverridden.push(frame.id);
+    }
+  }
+
+  // Blend-shape mesh_verts overrides (rare, depgraph doesn't cover
+  // them yet) — upload AFTER the depgraph pass so they win for
+  // shapekey-only parts.
   if (poseOverrides) {
     for (const [nodeId, ov] of poseOverrides) {
       if (!ov.mesh_verts) continue;
@@ -163,7 +232,7 @@ export function captureExportFrame(ctx, opts) {
       const m = getMesh(node, exportProject);
       if (m) {
         scene.parts.uploadPositions(nodeId, ov.mesh_verts, new Float32Array(m.uvs));
-        exportMeshOverridden.push(nodeId);
+        if (!exportMeshOverridden.includes(nodeId)) exportMeshOverridden.push(nodeId);
       }
     }
   }
