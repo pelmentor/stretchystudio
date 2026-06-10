@@ -12,7 +12,7 @@ import { gatherPhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { sanitisePartName } from '../lib/partId.js';
 import { logger } from '../lib/logger.js';
-import { isBoneGroup } from './objectDataAccess.js';
+import { isBoneGroup, getMesh } from './objectDataAccess.js';
 
 /**
  * Attach the runtime physics rule list onto a rigSpec. Single source
@@ -297,6 +297,107 @@ function _seedDefaultsForRig(rigSpec, project) {
   if (entries.length > 0) {
     useParamValuesStore.getState().syncFromProject();
   }
+
+  // 2026-06-10 Kora "bones don't move layers" — once-per-rig diagnostic
+  // for the OVERLAY path (the rigid-follow path that fires for parts
+  // with NO bone weights but a bone-group ancestor in their parent
+  // chain — v32's intended replacement for the stripped rigid-1.0
+  // weights). When the user reports "rotating bone X doesn't deform
+  // the mesh", what we need to know is: (a) does bone X have any
+  // descendant parts in the parent chain? and (b) what composition
+  // path does each part take (LBS / overlay / none)? Without (a)
+  // the overlay can't fire — the parts aren't structurally tied to
+  // the bone, no matter what my BONE → PARAM mirror does.
+  //
+  // Single-pass diagnostic; dedupe by rig-shape signature to avoid
+  // flooding on repeat re-seeds.
+  if (_lastBoneAncestorDiagSig !== _sig) {
+    _lastBoneAncestorDiagSig = _sig;
+    try {
+      const nodes = project?.nodes ?? [];
+      const byId = new Map();
+      for (const n of nodes) if (n?.id) byId.set(n.id, n);
+      const bones = nodes.filter((n) => isBoneGroup(n));
+      /** @type {Map<string, {name: string, descendantParts: number, lbsParts: number, overlayParts: number}>} */
+      const perBone = new Map();
+      for (const b of bones) {
+        perBone.set(b.id, {
+          name: b.name || b.id,
+          descendantParts: 0,
+          lbsParts: 0,
+          overlayParts: 0,
+        });
+      }
+      let partsWithBoneAncestor = 0;
+      let partsWithoutBoneAncestor = 0;
+      let partsLbs = 0;
+      let partsOverlay = 0;
+      let partsNone = 0;
+      for (const n of nodes) {
+        if (n?.type !== 'part') continue;
+        // Walk parent chain to find nearest bone.
+        let cur = n.parent ? byId.get(n.parent) : null;
+        const seen = new Set();
+        let ancestorBoneId = null;
+        while (cur && !seen.has(cur)) {
+          seen.add(cur);
+          if (isBoneGroup(cur)) { ancestorBoneId = cur.id; break; }
+          cur = cur.parent ? byId.get(cur.parent) : null;
+        }
+        if (ancestorBoneId) partsWithBoneAncestor++;
+        else partsWithoutBoneAncestor++;
+
+        // Check mesh weight presence (LBS path). Route through getMesh
+        // so v18 dataId-split parts resolve correctly.
+        const m = getMesh(n, project);
+        const hasWeights = Array.isArray(m?.boneWeights) && m.boneWeights.length > 0;
+        if (hasWeights) {
+          partsLbs++;
+          if (ancestorBoneId && perBone.has(ancestorBoneId)) {
+            perBone.get(ancestorBoneId).lbsParts++;
+          }
+        } else if (ancestorBoneId) {
+          partsOverlay++;
+          if (perBone.has(ancestorBoneId)) {
+            perBone.get(ancestorBoneId).overlayParts++;
+          }
+        } else {
+          partsNone++;
+        }
+
+        if (ancestorBoneId && perBone.has(ancestorBoneId)) {
+          perBone.get(ancestorBoneId).descendantParts++;
+        }
+      }
+      /** @type {Array<{boneId:string, name:string, descendantParts:number, lbsParts:number, overlayParts:number}>} */
+      const perBoneSummary = [];
+      for (const [boneId, stats] of perBone) {
+        if (stats.descendantParts > 0) {
+          perBoneSummary.push({ boneId, ...stats });
+        }
+      }
+      const unwiredBones = [];
+      for (const [boneId, stats] of perBone) {
+        if (stats.descendantParts === 0) {
+          unwiredBones.push(stats.name);
+        }
+      }
+      logger.info('boneAncestorDiag',
+        `bone→part chain audit: ${partsWithBoneAncestor}/${partsWithBoneAncestor + partsWithoutBoneAncestor} parts have bone ancestor (lbs=${partsLbs}, overlay=${partsOverlay}, none=${partsNone})`,
+        {
+          totalBones: bones.length,
+          bonesWithDescendants: perBoneSummary.length,
+          bonesWithoutDescendants: unwiredBones.length,
+          unwiredBoneNamesSample: unwiredBones.slice(0, 8),
+          perBoneSample: perBoneSummary.slice(0, 8),
+          hint: partsWithoutBoneAncestor > 0 || unwiredBones.length > 0
+            ? 'Parts without bone ancestor OR bones with 0 descendant parts → overlay path cannot fire. Rotating those bones in pose mode will not deform the mesh — the structural parent chain doesn\'t connect them.'
+            : 'Every part has a bone ancestor; overlay path should fire on bone rotation.',
+        });
+    } catch (err) {
+      logger.warn('boneAncestorDiag', `audit threw: ${String(err)}`, { error: String(err) });
+    }
+  }
 }
 
 // Auto-invalidate on geometry edits. Listens for `versionControl.geometryVersion`
@@ -309,6 +410,8 @@ function _seedDefaultsForRig(rigSpec, project) {
 // canonical re-build path either way.
 /** Dedupe signature for the boneMirror diagnostic log. */
 let _lastBoneMirrorSig = null;
+/** Dedupe signature for the bone-ancestor diagnostic log. */
+let _lastBoneAncestorDiagSig = null;
 
 let _prevGeometryVersion = useProjectStore.getState().versionControl?.geometryVersion ?? 0;
 useProjectStore.subscribe((state) => {
