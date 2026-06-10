@@ -1,8 +1,8 @@
 # Stretchy Studio
 
-**A 2D rigging editor that exports Live2D Cubism models — built around a Blender-style authoring workflow.**
+**A 2D character rigging editor with Blender-style authoring.**
 
-Stretchy Studio takes a tagged PSD or hand-laid layer set, auto-rigs a full Live2D Cubism rig (face parallax, eye closure, mouth open, head/body angle, physics), and exports both runtime `.moc3` and editable `.cmo3` projects that open in Cubism Editor 5.0. The authoring surface — modes, tools, hotkeys, the Properties panel, the canvas toolbar — is modelled after Blender so 2D artists with a 3D background feel at home.
+Stretchy Studio takes a tagged PSD or hand-laid layer set and produces a fully rigged character — bones, mesh deformers, parameters, physics, animations — that you can edit, animate, and export. The authoring surface (modes, tools, hotkeys, the Properties panel, the canvas toolbar) is modelled after Blender so 2D artists with a 3D background feel at home.
 
 [🚀 Launch the Editor](https://editor.stretchy.studio) · [💬 Discord](https://discord.com/invite/zB6TrHTwAb) · [🌐 stretchy.studio](https://stretchy.studio)
 
@@ -10,11 +10,12 @@ Stretchy Studio takes a tagged PSD or hand-laid layer set, auto-rigs a full Live
 
 ## What it does
 
-### Live2D export pipeline (the centerpiece)
+### Authoring
 
-- **`.moc3` runtime** — texture atlas, draw order, parameters, animations (`.motion3.json`). Loads in Cubism Viewer, Ren'Py, and any Cubism SDK app.
-- **`.cmo3` Cubism Editor project** — per-mesh textures, part hierarchy, rotation deformers, parameter bindings. Opens in Cubism Editor 5.0 for further authoring.
-- **`.can3` animation** — parameter keyframes with Bezier curves, auto-generated alongside `.cmo3` when the project has animations.
+- **3 workspaces** — Edit, Pose, Animation — each tuned to a phase of the pipeline, sharing one canvas + one source of truth.
+- **One Edit Mode slot** with sub-modes (Mesh / Skeleton / BlendShape / Keyform / Weight Paint), surfaced via the canvas ModePill. `Tab` toggles Object↔Edit universally; `G/R/S` does modal grab/rotate/scale on bone pose; mesh-edit gets proportional editing with `O`/`Shift+O`/`Alt+O` falloff.
+- **Click-to-select** with triangle hit-test against rig frames; `KeyA` toggles select-all; `B` box-select; `I` keyframes the hovered property at the playhead.
+- **Native runtime evaluator** — chain eval, scrubber UI, mask allocator, pendulum physics, idle-skip eval cache. The viewport shows the deformed rig live during editing.
 
 ### Auto-rigging
 
@@ -22,25 +23,23 @@ Stretchy Studio takes a tagged PSD or hand-laid layer set, auto-rigs a full Live
 - **DWPose ONNX** for AI-driven joint detection on see-through-style PSDs; **heuristic** fallback for instant skeleton estimation from layer bounds.
 - **Variants.** Layer-name convention `<base>.<suffix>` (e.g. `mouth.smile`, `topwear.winter`) auto-creates `Param<Suffix>` that crossfades between base and variant. Eye variants get a 2D keyform grid (blink × variant simultaneously).
 
-### Authoring (Blender-style)
+### Animation
 
-- **3 workspaces** — Edit, Pose, Animation — each tuned to a phase of the pipeline, sharing one canvas + one source of truth.
-- **One Edit Mode slot** with sub-modes (Mesh / Skeleton / BlendShape / Keyform / Weight Paint), surfaced via the canvas ModePill. `Tab` toggles Object↔Edit universally; `G/R/S` does modal grab/rotate/scale on bone pose; mesh-edit gets proportional editing with `O`/`Shift+O`/`Alt+O` falloff.
-- **Click-to-select** with triangle hit-test against rig frames; `KeyA` toggles select-all.
-- **Native runtime evaluator** — chain eval, scrubber UI, mask allocator, Cubism pendulum physics, idle-skip eval cache. The viewport shows the deformed rig live; you don't need Cubism Viewer to preview.
-- **Cubism warp / physics ports** — byte-faithful ports of Cubism's evaluator (Phase 2b shipped) and pendulum kernel (Phases 0/1/2 shipped). Live preview matches Cubism Editor's deformation within float32 noise.
+- **Timeline + Dopesheet + F-Curve editor** — Blender-style keyframe surfaces. Drag, snap-to-extremes, ghost-render-on-drag, plain-wheel zoom, MMB-pan.
+- **Procedural motion presets** — generate idle / listening / talking / glances / tilts from one CLI command or the export dialog. Each preset is a deterministic function of (personality, duration, seed).
+- **Audio tracks** — layer music + SFX in the timeline; trim, position, sync with the playhead.
 
-### Other exports
+### Export
 
-- **Spine 4.0 JSON** — maps SS hierarchies, setup poses, and animation tracks (translate / rotate / scale / opacity) to the Spine 4.0 schema, with auto image packing.
-- **PNG / WEBP / JPG sequences** — frame-by-frame export with custom scale, FPS, transparent / solid / grid backgrounds.
+- **Live2D Cubism** — both runtime (`.moc3` + `.model3.json` + `.physics3.json` + `.motion3.json`) and editor source (`.cmo3` + `.can3`) for Cubism Editor 5.0. The live viewport's evaluator is a port of Cubism's warp + pendulum kernels, so what you see matches what the runtime produces.
+- **Spine 4.0 JSON** — bones, slots, attachments, animation tracks (translate / rotate / scale / opacity) with auto image packing.
+- **PNG / WEBP / JPG sequences** — frame-by-frame, with custom scale, FPS, transparent / solid backgrounds.
 
 ### Other features
 
 - **Iris clipping** — irises stay contained in their paired eyewhite (variant-aware).
 - **Limb skinning** — monolithic limb meshes with per-vertex bone weights bake to art-mesh keyforms, so elbows/knees bend without mesh splitting.
-- **Audio tracks** — layer music + SFX in the timeline; trim, position, sync with animation.
-- **Project format** — `.stretch` (ZIP with embedded textures + JSON metadata), with full undo/redo via snapshot history.
+- **Project format** — `.stretch` (ZIP with embedded textures + JSON metadata), full undo/redo via snapshot history.
 
 ---
 
@@ -49,7 +48,7 @@ Stretchy Studio takes a tagged PSD or hand-laid layer set, auto-rigs a full Live
 1. Open [editor.stretchy.studio](https://editor.stretchy.studio).
 2. Drag a `.stretch` project, PSD, or PNG into the workspace.
 3. For a fresh PSD: follow the 3-step wizard (rig method → joint adjust → finish).
-4. **Export** in the toolbar → pick **Live2D Runtime** (.moc3) or **Live2D Project** (.cmo3) or **Spine** or **PNG sequence**.
+4. **File → Export…** → pick a format (Live2D runtime / Cubism project / Spine / PNG sequence).
 
 For tagged-PSD auto-rig to work end-to-end, the layer names need standard tags (`face`, `eyewhite-l/r`, `mouth`, etc.). The wizard's heuristic mode and DWPose mode both write these tags during import.
 
@@ -59,7 +58,7 @@ For tagged-PSD auto-rig to work end-to-end, the layer names need standard tags (
 
 ### Tech stack
 
-[React](https://react.dev/) + [Vite](https://vitejs.dev/) · [Zustand](https://github.com/pmndrs/zustand) + [Immer](https://immerjs.github.io/immer/) · [WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext) + [gl-matrix](http://glmatrix.net/) · [Tailwind CSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) · [ag-psd](https://github.com/misonou/ag-psd) (PSD parsing) · [JSZip](https://stuk.github.io/jszip/) (Live2D export packaging).
+[React](https://react.dev/) + [Vite](https://vitejs.dev/) · [Zustand](https://github.com/pmndrs/zustand) + [Immer](https://immerjs.github.io/immer/) · [WebGL2](https://developer.mozilla.org/en-US/docs/Web/API/WebGL2RenderingContext) + [gl-matrix](http://glmatrix.net/) · [Tailwind CSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) · [ag-psd](https://github.com/misonou/ag-psd) (PSD parsing) · [JSZip](https://stuk.github.io/jszip/) (export packaging).
 
 ### Project structure
 
