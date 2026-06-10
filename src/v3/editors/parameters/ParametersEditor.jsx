@@ -17,17 +17,22 @@
  * @module v3/editors/parameters/ParametersEditor
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw, Wand2, Sparkles, Plus, X } from 'lucide-react';
 import { useProjectStore } from '../../../store/projectStore.js';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
+import { useAnimationStore } from '../../../store/animationStore.js';
 import { useWizardStore } from '../../../store/wizardStore.js';
 import { initializeRig } from '../../../services/RigService.js';
 import { buildParamGroups } from './groupBuilder.js';
 import { ParamRow } from './ParamRow.jsx';
 import { InitRigOptionsPopover } from './InitRigOptionsPopover.jsx';
 import { IdleMotionDialog } from '../actions/IdleMotionDialog.jsx';
+import { getActiveSceneAction } from '../../../anim/sceneAction.js';
+import { decodeFCurveTarget, buildParamFCurve } from '../../../anim/animationFCurve.js';
+import { upsertKeyframe } from '../../../anim/fcurve.js';
+import { toast } from '../../../hooks/use-toast.js';
 
 export function ParametersEditor() {
   // `project.parameters` is always an array (default state + migration
@@ -57,6 +62,120 @@ export function ParametersEditor() {
     }
     return null;
   });
+
+  // Active action — needed for the keyed-state dot per row + the
+  // per-row I-key keyframe insertion. Read both action sources (scene
+  // binding wins, UI fallback) via `getActiveSceneAction`. Memoised on
+  // (actions, activeActionId) so 60Hz currentTime ticks don't bust it.
+  const activeActionId = useAnimationStore((s) => s.activeActionId);
+  const projectActions = useProjectStore((s) => s.project.actions);
+  const projectNodes  = useProjectStore((s) => s.project.nodes);
+  const activeAction = useMemo(
+    () => getActiveSceneAction({ actions: projectActions, nodes: projectNodes }, activeActionId),
+    [projectActions, projectNodes, activeActionId],
+  );
+
+  // Set of paramIds with an fcurve in the active action — drives the
+  // green animated-state dot per row. Updates when the action's fcurves
+  // change (add/remove of fcurves, action switch).
+  const keyedParamIds = useMemo(() => {
+    /** @type {Set<string>} */
+    const set = new Set();
+    if (!activeAction || !Array.isArray(activeAction.fcurves)) return set;
+    for (const fc of activeAction.fcurves) {
+      const t = decodeFCurveTarget(fc);
+      if (t?.kind === 'param') set.add(t.paramId);
+    }
+    return set;
+  }, [activeAction]);
+
+  // Shared hover ref — ParamRow updates this on pointerenter/leave; the
+  // window-level I-key handler reads it at fire time to know which
+  // param to keyframe. ref instead of state so hover updates don't
+  // re-render the editor.
+  const hoveredParamIdRef = useRef(/** @type {string|null} */ (null));
+
+  // Hover-gated I-key keyframe insertion (Blender's per-button I via
+  // UI keymap → `ANIM_OT_keyframe_insert_button` at
+  // `editors/animation/keyframing_ops_rna.cc`). When the user hovers a
+  // param row and presses I, we insert a keyform for THAT param at the
+  // current scrubber time. Falls back to the selected param if no row
+  // is hovered — matches Blender's button-context-precedence-then-
+  // selection-context behavior.
+  //
+  // Independent of the global `KeyI: insertKey.menu` operator (that
+  // one opens the AllParams keying-set picker for batch insert). The
+  // per-row I is the "per-property" path; the global I is the
+  // "keying-set" path. Both ship — the user picks via context.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.code !== 'KeyI') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      const t = /** @type {HTMLElement|null} */ (e.target);
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // Hover wins — Blender's per-button I-key path is strictly
+      // hover-bound (UI keymap), so a global I outside the parameters
+      // panel falls through to `insertKey.menu` (the AllParams keying-
+      // set picker). This keeps the two paths cleanly separated.
+      const targetParamId = hoveredParamIdRef.current;
+      if (!targetParamId) return;   // not hovering a row → defer to global I-menu
+      const action = getActiveSceneAction(
+        useProjectStore.getState().project,
+        useAnimationStore.getState().activeActionId,
+      );
+      if (!action) {
+        toast({
+          title: 'Insert Keyframe',
+          description: 'No active action — create one in Actions panel first.',
+          variant: 'destructive',
+        });
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        return;
+      }
+      // Capture before preventDefault so the global I-menu doesn't
+      // also fire on the same keypress.
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      const time = useAnimationStore.getState().currentTime;
+      const value = useParamValuesStore.getState().values[targetParamId];
+      const paramSpec = params.find((p) => p.id === targetParamId);
+      const fallbackValue = typeof paramSpec?.default === 'number' ? paramSpec.default : 0;
+      const v = Number.isFinite(value) ? value : fallbackValue;
+      // Default interpolation = 'bezier' — matches Blender's User
+      // Preferences → Animation → Default Interpolation Mode default
+      // (`BEZT_IPO_BEZ`). `buildParamFCurve` accepts 'ease-both' as
+      // bezier proxy for new-fcurve creation path.
+      useProjectStore.getState().updateProject((p) => {
+        const a = p.actions.find((aa) => aa.id === action.id);
+        if (!a) return;
+        const fc = a.fcurves.find((f) => {
+          const tgt = decodeFCurveTarget(f);
+          return tgt?.kind === 'param' && tgt.paramId === targetParamId;
+        });
+        if (!fc) {
+          // First keyframe on this param — synthesise the fcurve.
+          const fresh = buildParamFCurve(targetParamId, [
+            { time, value: v, easing: 'ease-both' },
+          ]);
+          if (fresh) a.fcurves.push(fresh);
+          return;
+        }
+        upsertKeyframe(fc, time, v, 'bezier');
+      });
+      const fps = useAnimationStore.getState().fps;
+      const frame = Math.round((time / 1000) * Math.max(1, fps));
+      const vDisplay = Math.abs(v) >= 5 ? Number(v).toFixed(0) : Number(v).toFixed(2);
+      toast({
+        title: 'Insert Keyframe',
+        description: `${paramSpec?.name || targetParamId} = ${vDisplay} at frame ${frame}`,
+      });
+    };
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
+  }, [params]);
 
   // Collapse state per group key — local to the editor, not persisted.
   const [collapsed, setCollapsed] = useState(/** @type {Set<string>} */ (new Set()));
@@ -253,7 +372,13 @@ export function ParametersEditor() {
               {!isCollapsed ? (
                 <div className="flex flex-col gap-0.5 py-1">
                   {g.params.map((p) => (
-                    <ParamRow key={p.id} param={p} selected={activeParamId === p.id} />
+                    <ParamRow
+                      key={p.id}
+                      param={p}
+                      selected={activeParamId === p.id}
+                      isKeyed={keyedParamIds.has(p.id)}
+                      hoveredParamIdRef={hoveredParamIdRef}
+                    />
                   ))}
                 </div>
               ) : null}

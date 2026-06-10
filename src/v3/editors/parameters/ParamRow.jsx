@@ -1,20 +1,34 @@
 // @ts-check
 
 /**
- * v3 Phase 1D — Single parameter row with name + slider + readout.
+ * v3 Phase 1D — Single parameter row, Blender Shape-Keys-style slider.
  *
- * Reads the live dial position from `paramValuesStore` and writes
- * back through `setParamValue` on every change. The CanvasViewport
- * tick consumes the same store via evalRig, so dragging here drives
- * the deform within the same frame.
+ * Visual model mirrors Blender's `layout.prop(kb, "value")` row in the
+ * Shape Keys panel (`reference/blender/scripts/startup/bl_ui/
+ * properties_data_mesh.py:265-292`): one composite horizontal bar that
+ * combines name, value, and the slider track into a single visual
+ * element. The fill renders left→right based on `(value-min)/range`
+ * just like Blender's `uiBut` "BUT_TYPE_NUMSLI". Clicking anywhere on
+ * the bar drag-scrubs the value (Radix's slider supports
+ * click-to-set + drag-to-scrub out of the box).
  *
- * Step is adaptive (matches v2 ParametersPanel): wide ranges (≥5)
- * step by 1; sub-5 ranges by 0.01. Display precision tracks step.
+ * A small leftmost dot indicates animation state:
+ *   - green dot  ▎the param has an fcurve in the active action
+ *   - dim dot    ▎no fcurve (Blender's "not animated" state)
+ *
+ * Press `I` while hovering the row to insert a keyframe at the current
+ * scrubber time. Mirrors Blender's per-button I-key (UI keymap binds
+ * `ANIM_OT_keyframe_insert_button` to `I` over any animatable button —
+ * `editors/animation/keyframing_ops_rna.cc::ANIM_OT_keyframe_insert_button`).
+ * The hover handler is owned by `ParametersEditor` (one window listener
+ * instead of N per-row listeners); this row only updates the parent's
+ * `hoveredParamIdRef` on pointerenter/leave.
  *
  * @module v3/editors/parameters/ParamRow
  */
 
 import { memo, useState } from 'react';
+import * as SliderPrimitive from '@radix-ui/react-slider';
 import { Trash2, Check, X } from 'lucide-react';
 import { useParamValuesStore } from '../../../store/paramValuesStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
@@ -24,7 +38,6 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { getEditorMode } from '../../../store/uiV3Store.js';
 import { autoKeyParamProperty, findParamFCurve } from '../../../renderer/animationEngine.js';
 import { getActiveSceneAction } from '../../../anim/sceneAction.js';
-import { Slider as SliderImpl } from '../../../components/ui/slider.jsx';
 import { logger } from '../../../lib/logger.js';
 
 // BUG-015 instrumentation — only the BodyAngle params get logged so the
@@ -33,20 +46,17 @@ import { logger } from '../../../lib/logger.js';
 // these two probes split that boundary in two.
 const TRACED_PARAMS = new Set(['ParamBodyAngleX', 'ParamBodyAngleY', 'ParamBodyAngleZ']);
 
-// slider.jsx is a forwardRef without JSDoc, so tsc can't see its
-// passthrough props. Cast to a permissive type — runtime stays the
-// same Radix Slider.
-/** @type {React.ComponentType<{min:number,max:number,step:number,value:number[],onValueChange:(v:number[])=>void,onPointerDown?:(e:React.PointerEvent)=>void}>} */
-const Slider = /** @type {any} */ (SliderImpl);
-
 /**
  * @param {Object} props
  * @param {import('./groupBuilder.js').ParamSpecLike} props.param
- * @param {boolean} props.selected - lifted from ParametersEditor; lets
- *   `React.memo` skip rerenders when neither this row's param value
- *   nor its selected flag changed (e.g. an unrelated row was selected).
+ * @param {boolean} props.selected
+ * @param {boolean} props.isKeyed
+ *   true iff the active action has an fcurve for this param — drives
+ *   the leftmost animated-state dot.
+ * @param {React.MutableRefObject<string|null>} props.hoveredParamIdRef
+ *   Shared with ParametersEditor for the window-level I-key handler.
  */
-function ParamRowImpl({ param, selected }) {
+function ParamRowImpl({ param, selected, isKeyed, hoveredParamIdRef }) {
   const value = useParamValuesStore((s) => s.values[param.id] ?? param.default ?? 0);
   const setParamValue = useParamValuesStore((s) => s.setParamValue);
   const select = useSelectionStore((s) => s.select);
@@ -59,23 +69,48 @@ function ParamRowImpl({ param, selected }) {
   const step = range >= 5 ? 1 : 0.01;
   const fmt  = step >= 1 ? Number(value).toFixed(0) : Number(value).toFixed(2);
 
-  /** Reset this param to its default value. Used by both the
-   *  right-click context menu and the readout double-click. */
   function resetToDefault() {
     const def = typeof param.default === 'number' ? param.default : 0;
     setParamValue(param.id, def);
   }
 
+  function onValueChange(/** @type {number[]} */ next) {
+    const v = next[0];
+    if (TRACED_PARAMS.has(param.id)) {
+      logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
+    }
+    setParamValue(param.id, v);
+    // Auto-keyframe in animation mode. This is Blender's UI-button
+    // auto-key path (`button_anim_autokey` → `autokeyframe_property`
+    // with `only_if_property_keyed=true`): a slider drag only
+    // MAINTAINS an existing param fcurve, never creates one, and is
+    // scoped to the touched param alone (NOT routed through
+    // `runAutoKey`/`project.autoKeyMode`). The first keyframe is
+    // inserted via the I-menu, the per-row I-key, or the AllParams
+    // keying set. See `autoKeyParamProperty`.
+    const ed = useEditorStore.getState();
+    if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
+    const an = useAnimationStore.getState();
+    const proj = useProjectStore.getState().project;
+    const activeAction = getActiveSceneAction(proj, an.activeActionId);
+    if (!activeAction || !findParamFCurve(activeAction, param.id)) return;
+    useProjectStore.getState().updateProject((p) => {
+      const a = p.actions.find((aa) => aa.id === activeAction.id);
+      if (a) autoKeyParamProperty(a, param.id, an.currentTime, v, 'ease-both');
+    });
+  }
+
   return (
     <div
       className={
-        'flex flex-col gap-1 px-2 py-1 rounded transition-colors cursor-default ' +
-        (selected ? 'bg-primary/15' : 'hover:bg-muted/30')
+        'group/row relative flex items-center gap-1 px-2 py-0.5 cursor-default ' +
+        (selected ? 'bg-primary/15' : '')
       }
-      // Click anywhere on the row (except the slider thumb itself) → select.
+      onPointerEnter={() => { hoveredParamIdRef.current = param.id; }}
+      onPointerLeave={() => {
+        if (hoveredParamIdRef.current === param.id) hoveredParamIdRef.current = null;
+      }}
       onClick={(e) => {
-        // Skip clicks on the Radix slider thumb / track so dragging
-        // doesn't fight selection.
         const target = /** @type {HTMLElement} */ (e.target);
         if (target.closest('[role="slider"], [data-orientation]')) return;
         /** @type {'replace'|'add'|'toggle'} */
@@ -84,117 +119,119 @@ function ParamRowImpl({ param, selected }) {
         else if (e.ctrlKey || e.metaKey) modifier = 'toggle';
         select({ type: 'parameter', id: param.id }, modifier);
       }}
-      // Right-click → reset to default. Bypasses the browser's
-      // default context menu so the user gets one-action reset
-      // without leaving the keyboard / mouse.
       onContextMenu={(e) => {
         e.preventDefault();
         resetToDefault();
       }}
-      // Double-click on the row also resets — the readout area
-      // catches its own double-click below for the same gesture
-      // when the slider would otherwise eat the event.
       onDoubleClick={(e) => {
         const target = /** @type {HTMLElement} */ (e.target);
         if (target.closest('[role="slider"], [data-orientation]')) return;
         resetToDefault();
       }}
-      title="Right-click or double-click to reset to default"
+      title={
+        (param.name || param.id) +
+        ' — hover + press I to keyframe, right-click to reset, drag to scrub'
+      }
     >
-      <div className="flex items-center justify-between gap-2 text-[11px] group">
-        <span className="truncate font-medium" title={param.id}>
-          {param.name || param.id}
-        </span>
-        <span className="flex items-center gap-1 shrink-0">
-          <span className="text-muted-foreground tabular-nums font-mono text-[10px]">
-            {fmt}
-            <span className="text-muted-foreground/50 ml-1">
-              [{min}, {max}]
-            </span>
-          </span>
-          {pendingDelete ? (
-            <span
-              className="flex items-center gap-0.5"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                type="button"
-                className="p-0.5 rounded hover:bg-destructive/30 text-destructive"
-                title="Confirm delete (cascades through bindings, fcurves, physics inputs)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeParameter(param.id);
-                  setPendingDelete(false);
-                }}
-              >
-                <Check size={10} />
-              </button>
-              <button
-                type="button"
-                className="p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
-                title="Cancel"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingDelete(false);
-                }}
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
-              title="Delete parameter (drops every reference)"
-              onClick={(e) => {
-                e.stopPropagation();
-                setPendingDelete(true);
-              }}
-            >
-              <Trash2 size={10} />
-            </button>
-          )}
-        </span>
-      </div>
-      <Slider
+      {/* Composite slider — Blender Shape Keys row shape. The Radix
+          slider primitives provide click-to-set + drag-to-scrub +
+          keyboard a11y; the visible chrome is our overlay. The
+          SliderThumb is sized to 0px so it doesn't render but Radix
+          still tracks pointer/keyboard focus through it. */}
+      <SliderPrimitive.Root
         min={min}
         max={max}
         step={step}
         value={[value]}
+        onValueChange={onValueChange}
         onPointerDown={TRACED_PARAMS.has(param.id) ? () => {
           logger.debug('paramRow', `${param.id} pointerDown`, { id: param.id, currentValue: value });
         } : undefined}
-        onValueChange={([v]) => {
-          if (TRACED_PARAMS.has(param.id)) {
-            logger.debug('paramRow', `${param.id} onValueChange → ${v}`, { id: param.id, v, prev: value });
-          }
-          setParamValue(param.id, v);
-          // Auto-keyframe in animation mode. This is Blender's UI-button
-          // auto-key path (`button_anim_autokey` → `autokeyframe_property`
-          // with `only_if_property_keyed=true`): a slider drag only
-          // MAINTAINS an existing param fcurve, never creates one, and is
-          // scoped to the touched param alone (NOT routed through
-          // `runAutoKey`/`project.autoKeyMode` — those drive the viewport
-          // transform/pose path). The first keyframe is inserted via the
-          // I-menu → `AllParams` keying set. See `autoKeyParamProperty`.
-          const ed = useEditorStore.getState();
-          if (getEditorMode() !== 'animation' || !ed.autoKeyframe) return;
-          const an = useAnimationStore.getState();
-          const proj = useProjectStore.getState().project;
-          // Stage 1.E: scene-bound action wins over UI-store fallback.
-          const activeAction = getActiveSceneAction(proj, an.activeActionId);
-          // Only-if-keyed: skip the undo-snapshotting updateProject when
-          // the param has no fcurve (Blender skips the notifier when
-          // `autokeyframe_property` returns changed==false). onValueChange
-          // fires continuously during a drag, so a no-op here would spam
-          // the undo stack.
-          if (!activeAction || !findParamFCurve(activeAction, param.id)) return;
-          useProjectStore.getState().updateProject((p) => {
-            const a = p.actions.find((aa) => aa.id === activeAction.id);
-            if (a) autoKeyParamProperty(a, param.id, an.currentTime, v, 'ease-both');
-          });
-        }}
-      />
+        className="relative flex flex-1 h-6 items-center touch-none select-none"
+      >
+        <SliderPrimitive.Track className="relative w-full h-full grow rounded-sm border border-border/60 bg-muted/40 overflow-hidden">
+          {/* Fill bar — Blender's BUT_TYPE_NUMSLI fill colour, SS
+              substitutes a translucent primary. */}
+          <SliderPrimitive.Range className="absolute inset-y-0 left-0 bg-primary/35" />
+          {/* Animated-state dot. Bright when the active action has an
+              fcurve for this param. `pointer-events-none` so it never
+              eats slider clicks. */}
+          <span
+            className={
+              'absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full pointer-events-none ' +
+              (isKeyed ? 'bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.55)]' : 'bg-muted-foreground/30')
+            }
+            aria-hidden="true"
+          />
+          {/* Name + value overlay. The text container is
+              pointer-events-none so the entire bar drags as one
+              unit. textShadow keeps labels legible over the fill. */}
+          <div className="absolute inset-0 flex items-center pl-4 pr-2 gap-2 text-[11px] pointer-events-none">
+            <span
+              className="flex-1 truncate font-medium text-foreground/95"
+              style={{ textShadow: '0 0 2px rgba(0,0,0,0.75)' }}
+            >
+              {param.name || param.id}
+            </span>
+            <span
+              className="tabular-nums font-mono text-[10px] text-foreground/90 shrink-0"
+              style={{ textShadow: '0 0 2px rgba(0,0,0,0.75)' }}
+            >
+              {fmt}
+              <span className="text-muted-foreground/60 ml-1">
+                [{min}, {max}]
+              </span>
+            </span>
+          </div>
+        </SliderPrimitive.Track>
+        {/* Invisible thumb — keeps Radix's keyboard a11y + focus ring
+            working without painting a visible knob. */}
+        <SliderPrimitive.Thumb className="block w-0 h-0 focus-visible:outline-none" />
+      </SliderPrimitive.Root>
+      {/* Delete affordance — only reveals on row hover. Outside the
+          slider so it never eats slider clicks. */}
+      {pendingDelete ? (
+        <span
+          className="flex items-center gap-0.5 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="p-0.5 rounded hover:bg-destructive/30 text-destructive"
+            title="Confirm delete (cascades through bindings, fcurves, physics inputs)"
+            onClick={(e) => {
+              e.stopPropagation();
+              removeParameter(param.id);
+              setPendingDelete(false);
+            }}
+          >
+            <Check size={10} />
+          </button>
+          <button
+            type="button"
+            className="p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
+            title="Cancel"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPendingDelete(false);
+            }}
+          >
+            <X size={10} />
+          </button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="p-0.5 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive opacity-0 group-hover/row:opacity-60 hover:opacity-100 transition-opacity shrink-0"
+          title="Delete parameter (drops every reference)"
+          onClick={(e) => {
+            e.stopPropagation();
+            setPendingDelete(true);
+          }}
+        >
+          <Trash2 size={10} />
+        </button>
+      )}
     </div>
   );
 }
