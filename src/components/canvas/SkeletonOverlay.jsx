@@ -394,6 +394,70 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (editorModeRef.current === 'staging') {
         beginBatch(useProjectStore.getState().project);
       }
+
+      // 2026-06-10 "bones don't move layers" deep diagnostic.
+      // On drag-START, snapshot exactly what the downstream chain SHOULD
+      // do for this bone: how many parts have it as their nearest bone
+      // ancestor (overlay candidates), how many parts have weights
+      // pointing to it (LBS candidates), and the bone's starting
+      // pose.rotation. If the count is zero, the bone is "stranded" —
+      // structurally disconnected from any mesh — and rotating it can't
+      // deform anything (no LBS target, no overlay target). If the count
+      // is non-zero but the user still sees no deformation, the gap is
+      // downstream (depgraph cache / kernel / GPU upload), not here.
+      try {
+        const proj = useProjectStore.getState().project;
+        const nodes = proj?.nodes ?? [];
+        const byId = new Map();
+        for (const n of nodes) if (n?.id) byId.set(n.id, n);
+        let overlayCandidates = 0;
+        let lbsCandidates = 0;
+        const overlaySample = [];
+        const lbsSample = [];
+        for (const n of nodes) {
+          if (n?.type !== 'part') continue;
+          // LBS: any part whose mesh.jointBoneId === this bone.
+          const m = n.dataId
+            ? proj.nodes.find((x) => x?.id === n.dataId)?.mesh
+            : n.mesh;
+          if (m?.jointBoneId === nodeId) {
+            lbsCandidates++;
+            if (lbsSample.length < 4) lbsSample.push(n.name || n.id);
+            continue;
+          }
+          // Overlay: walk parents, nearest bone ancestor === this bone.
+          let cur = n.parent ? byId.get(n.parent) : null;
+          const seen = new Set();
+          let ancestorBoneId = null;
+          while (cur && !seen.has(cur)) {
+            seen.add(cur);
+            if (cur.type === 'group' && typeof cur.boneRole === 'string') {
+              ancestorBoneId = cur.id; break;
+            }
+            cur = cur.parent ? byId.get(cur.parent) : null;
+          }
+          if (ancestorBoneId === nodeId) {
+            overlayCandidates++;
+            if (overlaySample.length < 4) overlaySample.push(n.name || n.id);
+          }
+        }
+        logger.info('boneRotateStart',
+          `bone "${node.name || nodeId}" rotate-start: ${lbsCandidates} LBS parts + ${overlayCandidates} overlay parts (start rotation ${startRotation.toFixed(2)}°)`,
+          {
+            boneId: nodeId,
+            boneName: node.name || nodeId,
+            startRotation,
+            lbsCandidates,
+            overlayCandidates,
+            lbsSample,
+            overlaySample,
+            hint: (lbsCandidates + overlayCandidates) === 0
+              ? 'Bone is structurally stranded — no parts will follow it. Run F3 → "Auto-Skin Unwired Bones" or click Initialize Rig.'
+              : 'Bone has wired parts. If mesh still doesn\'t follow on drag, the gap is downstream (depgraph cache / pose-read / kernel decision).',
+          });
+      } catch (err) {
+        logger.warn('boneRotateStart', `diagnostic threw: ${String(err)}`, { error: String(err) });
+      }
     }
   }, [skeletonEditMode, effectiveNodes, setSelection, selectBoneInBothStores, actions, animActiveActionId, animCurrentTime, animDraftPose]);
 
