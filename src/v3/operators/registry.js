@@ -43,6 +43,7 @@ import { deleteVertices } from './edit/deleteVerts.js';
 import { cutMeshAlongLine } from './edit/knife.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
+import { autoSkinAllParts } from '../../io/live2d/rig/autoSkinning.js';
 // Phase 7.A — Object Mode tools (Snap / Mirror / Parent / Set Origin).
 // Eager-import per audit lesson G-1 (`async exec` leaks unhandled rejections
 // when the dispatcher fires `op.exec(...)` non-await).
@@ -2343,6 +2344,67 @@ function registerBuiltins() {
           description: `Mirrored roles not in clipboard: ${r.unmatchedRoles.slice(0, 3).join(', ')}${r.unmatchedRoles.length > 3 ? '…' : ''}`,
         });
       }
+    },
+  });
+
+  // Rig — Auto-Skin Unwired Bones. Explicit user-triggered pass
+  // (2026-06-10 Kora bug fix follow-up). Walks every meshed part and
+  // assigns rigid `[1, 1, …]` LBS weights + `jointBoneId` to the
+  // spatially-nearest bone IF the part has no existing skinning
+  // binding AND no bone-group ancestor in `node.parent` chain. See
+  // `src/io/live2d/rig/autoSkinning.js` for the heuristic + the three
+  // skip predicates. Pre-fix the PSD-import wizard only wired the
+  // four limb blend zones (elbow/knee) — every other bone (shoulder,
+  // head, neck, torso, eyes) had zero parts pointing at it, so
+  // rotating them in pose mode rotated the skeleton overlay but the
+  // mesh stayed at rest. Running this operator on an already-imported
+  // character closes that gap. Idempotent — re-running is a no-op
+  // (every part already has weights or a bone ancestor).
+  //
+  // Not auto-applied via migration (that would silently mutate saved
+  // projects — RULE №2). Explicit user trigger only.
+  registerOperator({
+    id: 'rig.autoSkinUnwiredBones',
+    label: 'Auto-Skin Unwired Bones to Nearest Bone',
+    available: () => {
+      const proj = useProjectStore.getState().project;
+      return !!proj && Array.isArray(proj.nodes) && proj.nodes.length > 0;
+    },
+    exec: () => {
+      const store = useProjectStore.getState();
+      const proj = store.project;
+      if (!proj) {
+        toast({
+          title: 'Auto-Skin Unwired Bones',
+          description: 'No project loaded.',
+        });
+        return;
+      }
+      /** @type {{partsScanned: number, partsAssigned: number, byBone: Record<string, number>}} */
+      let summary = { partsScanned: 0, partsAssigned: 0, byBone: {} };
+      store.updateProject((draft) => {
+        summary = autoSkinAllParts(draft);
+      });
+      if (summary.partsAssigned === 0) {
+        toast({
+          title: 'Auto-Skin Unwired Bones',
+          description: `Nothing to skin — all ${summary.partsScanned} parts already have a binding or a bone ancestor.`,
+        });
+        return;
+      }
+      const byBoneEntries = Object.entries(summary.byBone);
+      const top = byBoneEntries
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([boneId, n]) => {
+          const node = (proj.nodes ?? []).find((x) => x?.id === boneId);
+          return `${node?.name ?? boneId}: ${n}`;
+        })
+        .join(', ');
+      toast({
+        title: 'Auto-Skin Unwired Bones',
+        description: `Skinned ${summary.partsAssigned} of ${summary.partsScanned} parts — ${top}${byBoneEntries.length > 4 ? '…' : ''}. Click Initialize Rig to register the new ParamRotation_<bone> params.`,
+      });
     },
   });
 
