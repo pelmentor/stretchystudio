@@ -111,6 +111,7 @@ import { migrateRigParentStrip } from './migrations/v48_rig_parent_strip.js';
 import { migrateVariantVisibleToOpacity } from './migrations/v49_variant_visible_to_opacity.js';
 import { migratePhysicsModifierPerNode } from './migrations/v50_physics_modifier_per_node.js';
 import { migrateDecimalPlacesThree } from './migrations/v51_decimal_places_three.js';
+import { migrateAutoSkinUnwiredBones } from './migrations/v52_auto_skin_unwired_bones.js';
 import { logger } from '../lib/logger.js';
 
 // CURRENT_SCHEMA_VERSION re-exported above from `./projectSchemaVersion.js`
@@ -911,6 +912,29 @@ const MIGRATIONS = {
   // 2026-06-09 round-8 breath snap debug entry.
   51: (project) => {
     migrateDecimalPlacesThree(project);
+    return project;
+  },
+
+  // v52 — auto-skin parts to their spatially-nearest bone when no
+  // existing skinning binding exists.
+  //
+  // Pre-v52 only the four limb blend zones (elbow/knee pair) got
+  // `mesh.boneWeights + mesh.jointBoneId` from the PSD-import wizard.
+  // Other bones (shoulders, head, neck, torso, eyes) had zero parts
+  // weighted to them → rotating them in pose mode rotated the
+  // skeleton overlay but the mesh stayed at rest. v52 walks every
+  // meshed part and assigns rigid [1,1,…] weights to the closest
+  // bone by mesh-centroid → bone-pivot distance.
+  //
+  // Idempotent. Skips parts that already have weights, parts with a
+  // bone ancestor in `node.parent` chain (overlay path covers
+  // those — avoids v31's double-rotation regression), and parts
+  // without mesh data.
+  //
+  // See `src/store/migrations/v52_auto_skin_unwired_bones.js` + the
+  // matching wizard-callback fallback in `CanvasViewport.jsx`.
+  52: (project) => {
+    migrateAutoSkinUnwiredBones(project);
     return project;
   },
 

@@ -110,6 +110,7 @@ import {
   computeSkinWeights,
   computeMeshCentroid,
 } from '@/components/canvas/viewport/meshPostProcess';
+import { assignRigidSkinningToPart } from '@/io/live2d/rig/autoSkinning';
 import { routeImport } from '@/components/canvas/viewport/fileRouting';
 import { findAncestorGroupsForCleanup } from '@/components/canvas/viewport/rigGroupCleanup';
 import { applySplits } from '@/components/canvas/viewport/applySplits';
@@ -2081,15 +2082,41 @@ export default function CanvasViewport({
           useEditorStore.getState().invalidateVertexSelectionForPart(partId);
 
           // Compute skin weights if this part belongs to a limb.
+          // Two-tier skinning (v52, 2026-06-10):
+          //   1. Limb blend zone — if the part's parent group is a
+          //      bone whose role maps to a child via `childBoneRoleFor`
+          //      (leftArm→leftElbow, etc.), assign variable per-vertex
+          //      weights via `computeSkinWeights`. Same behaviour as
+          //      pre-v52; unchanged for limb structure.
+          //   2. Rigid fallback — for every other part with no bone
+          //      ancestor in its parent chain, weight rigidly (`[1,…]`)
+          //      to the spatially-nearest bone via
+          //      `assignRigidSkinningToPart`. This is what makes
+          //      rotating non-limb bones (shoulder, head, neck, torso,
+          //      eyes) actually deform the mesh — pre-v52 those bones
+          //      had zero parts pointing at them so LBS was a no-op.
+          //      The same logic ships as the v52 migration so existing
+          //      saves get retro-skinned on next load.
           const parentGroup = proj.nodes.find(n => n.id === node.parent);
           const childRole = childBoneRoleFor(getBoneRole(parentGroup));
+          let skinned = false;
           if (childRole && parentGroup) {
             const jointBone = proj.nodes.find(n => n.parent === parentGroup.id && getBoneRole(n) === childRole);
             const newMesh = getMesh(node, proj);
             if (jointBone && newMesh) {
               newMesh.boneWeights = computeSkinWeights(vertices, parentGroup, jointBone);
               newMesh.jointBoneId = jointBone.id;
+              skinned = true;
               logger.info('skinning', `${node.name} → ${childRole} (${vertices.length} verts)`, { nodeId: node.id, childRole, vertCount: vertices.length });
+            }
+          }
+          if (!skinned) {
+            const assigned = assignRigidSkinningToPart(node, proj);
+            if (assigned) {
+              const newMesh = getMesh(node, proj);
+              logger.info('skinning',
+                `${node.name} → ${newMesh?.jointBoneId} (rigid, ${vertices.length} verts)`,
+                { nodeId: node.id, jointBoneId: newMesh?.jointBoneId, vertCount: vertices.length });
             }
           }
 
