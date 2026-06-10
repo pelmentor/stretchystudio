@@ -406,7 +406,17 @@ export function ModalTransformOverlay() {
             const ny = (orig.y ?? 0) + dyCanvas;
             writer(node, { x: nx, y: ny });
           } else if (kind === 'rotate') {
-            writer(node, { rotation: (orig.rotation ?? 0) + dRot });
+            // Unit conversion. `dRot` lives in RADIANS through this
+            // module (atan2 output, typed-input → radians at line ~346,
+            // HUD display divides by π/180 when rendering). But the
+            // node's pose/transform `rotation` slot is stored in
+            // DEGREES — `GizmoOverlay` (canvas.jsx:304), `SkeletonOverlay`
+            // (rotation arc), every fcurve emitter, and the cmo3/moc3
+            // exporters all read/write the rotation as degrees. Adding
+            // radians directly to degrees scales the user's gesture by
+            // 1/(180/π) ≈ 0.0175 — pre-2026-06-10 user report: "R rotates
+            // by a tiny margin micro level of rotation."
+            writer(node, { rotation: (orig.rotation ?? 0) + dRot * 180 / Math.PI });
           } else if (kind === 'scale') {
             const sx = axis === 'y' ? 1 : scaleMag;
             const sy = axis === 'x' ? 1 : scaleMag;
