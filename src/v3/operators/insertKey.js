@@ -102,11 +102,21 @@ function currentSelectionIds() {
  *
  * @param {{count:number, results:Array<{path:string,status:string}>}} res
  */
-function summariseResult(res) {
+function summariseResult(res, setId) {
   if (res.count === 0) {
     // Distinguish "nothing to do" from "everything skipped" for
     // operator feedback (Rule №1 -- explicit empty-result handling).
-    if (res.results.length === 0) return 'no channels matched the selection';
+    if (res.results.length === 0) {
+      // The "Available" set only emits paths for fcurves that ALREADY
+      // exist for the selected objects. For a first rest keyframe there
+      // ARE no fcurves yet, so Available is the wrong set. Mirrors
+      // Blender's silent-no-op behaviour but with a discoverability
+      // pointer, since SS users land on the I-menu fresh.
+      if (setId === 'Available') {
+        return 'no existing fcurves for the selection — pick "Location, Rotation & Scale" (or similar) for the first keyframe';
+      }
+      return 'nothing selected, or selection has no animatable channels — click a part / bone first';
+    }
     const statuses = new Set(res.results.map((r) => r.status));
     if (statuses.size === 1) {
       const only = res.results[0].status;
@@ -181,7 +191,7 @@ export function execApplyKeyingSet(setId) {
   });
   toast({
     title: `Insert Keyframe -- ${set.label ?? set.id}`,
-    description: summariseResult(result),
+    description: summariseResult(result, setId),
   });
 }
 

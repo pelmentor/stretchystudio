@@ -291,9 +291,41 @@ const avMixed = collectChannels(projectAvailMixed, getKeyingSet({}, 'Available')
 eq(avMixed.length, 1, '§7 — Available filters non-owner paths (MED-1)');
 eq(avMixed[0].path, 'objects["partA"].transform.x', '§7 — only the partA-owned path survives');
 
-// Object with no animData → no paths
+// Object with no animData → no paths (when no scene binding exists either).
+// `projectAvail` has no `__scene__` node, so the scene fallback in
+// availablePaths has nothing to resolve to and the channel set stays empty.
 const av3 = collectChannels(projectAvail, getKeyingSet({}, 'Available'), ['partC']);
-eq(av3.length, 0, '§7 — Available on object with null animData → empty');
+eq(av3.length, 0, '§7 — Available on object with null animData (no scene binding) → empty');
+
+// Scene-fallback: when `__scene__` carries `animData.actionId` AND the
+// scene action has fcurves owned by an object whose per-node animData
+// is null, Available now picks those fcurves up. Mirrors the matching
+// fallback in `insertKeyframe.js:resolveTargetAction`. Pre-fix
+// availablePaths required per-node `animData.actionId` and returned
+// 0 paths for every SS object (SS's v36 leaves them null).
+const projectAvailScene = {
+  nodes: [
+    { id: '__scene__', type: 'scene', name: 'Scene', animData: { actionId: 'sceneAct' } },
+    { id: 'bone1', type: 'group', name: 'Bone1', boneRole: 'rightArm' /* no animData */ },
+  ],
+  actions: [
+    {
+      id: 'sceneAct',
+      fcurves: [
+        { id: 'fcBoneRot', rnaPath: 'objects["bone1"].pose.rotation' },
+        { id: 'fcBoneX',   rnaPath: 'objects["bone1"].pose.x' },
+        { id: 'fcOther',   rnaPath: 'objects["__params__"].values["ParamSmile"]' },
+      ],
+    },
+  ],
+};
+const avScene = collectChannels(projectAvailScene, getKeyingSet({}, 'Available'), ['bone1']);
+eq(avScene.length, 2,
+  '§7 — scene-fallback: bone with null animData picks up scene action fcurves');
+eq(avScene[0].path, 'objects["bone1"].pose.rotation',
+  '§7 — scene-fallback: pose.rotation path emitted');
+eq(avScene[1].path, 'objects["bone1"].pose.x',
+  '§7 — scene-fallback: pose.x path emitted');
 
 // ─────────────────────────────────────────────────────────────────────
 // Section 8 — Active keying set pointer (immer mutator)

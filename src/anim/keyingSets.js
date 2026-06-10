@@ -228,14 +228,22 @@ function availablePaths(project, objectIds) {
     return [];
   }
   const nodes = Array.isArray(project.nodes) ? project.nodes : [];
+  const actionsArr = project.actions;
+  // Scene fallback — SS's v36 leaves every per-node `animData.actionId`
+  // null, so without this fallback `Available` returned 0 paths for
+  // every object even when the scene-bound action carried matching
+  // fcurves. Mirrors the matching fallback chain in
+  // `insertKeyframe.js:resolveTargetAction`.
+  const sceneNode = nodes.find((n) => n?.id === '__scene__');
+  const sceneActionId = sceneNode?.animData?.actionId ?? null;
   const seen = new Set();
   const out = [];
   for (const oid of objectIds) {
     const node = nodes.find((n) => n?.id === oid);
     if (!node) continue;
-    const actionId = node.animData?.actionId;
+    const actionId = node.animData?.actionId ?? sceneActionId;
     if (!actionId) continue;
-    const action = project.actions.find((a) => a?.id === actionId);
+    const action = actionsArr.find((a) => a?.id === actionId);
     if (!action || !Array.isArray(action.fcurves)) continue;
     const ownerPrefix = `objects["${oid}"]`;
     for (const fc of action.fcurves) {

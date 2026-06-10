@@ -1926,6 +1926,23 @@ export default function CanvasViewport({
       for (const nodeId of selectedIds) {
         anim.clearDraftPoseForNode(nodeId);
       }
+
+      // Success feedback — synthetic K events (auto-key 'all' mode) stay
+      // silent so the user isn't toast-flooded during drag-driven
+      // continuous auto-key, but manual K-presses now confirm what
+      // landed. Pre-fix the handler succeeded silently which felt
+      // identical to a silent bail.
+      if (!e.__ssAutoKey) {
+        const fps = useAnimationStore.getState().fps;
+        const frame = Math.round((currentTimeMs / 1000) * Math.max(1, fps));
+        const nodeLabel = selectedIds.length === 1
+          ? (proj.nodes.find((n) => n.id === selectedIds[0])?.name ?? selectedIds[0])
+          : `${selectedIds.length} nodes`;
+        toast({
+          title: 'Insert Keyframe (K)',
+          description: `Keyed all properties on ${nodeLabel} at frame ${frame}`,
+        });
+      }
     };
 
     window.addEventListener('keydown', handler);
