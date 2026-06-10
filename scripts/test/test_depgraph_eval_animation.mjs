@@ -89,6 +89,103 @@ function assertNear(a, b, eps, name) {
     'depgraph pose fcurve: byte-equal to computePoseOverrides');
 }
 
+// ---- I-key (keying-set) prefixed-rnaPath bone pose fcurve normalisation ----
+//
+// The K-key path (`insertAllProperties`) emits bare rnaPaths like
+// `objects["bone"].rotation`. The I-key path (`anim/keyingSets.js`
+// built-in sets) emits RNA-faithful prefixed rnaPaths like
+// `objects["bone"].pose.rotation` for bones and
+// `objects["part"].transform.rotation` for non-bones.
+//
+// Pre-fix the prefixed shape stored under `entry.set('pose.rotation', v)`
+// (and `{ 'pose.rotation': v }` in the engine path), but every consumer
+// — `applyPoseOverrides`, `buildPoseOverrideIndex`, CanvasViewport's
+// `kfOv[k]` reads — addresses by bare channel name. The skeleton overlay
+// would visually rotate the bone but the mesh stayed at rest because the
+// override never reached skinning. Pin the normalisation here so K-key
+// and I-key fcurves are indistinguishable downstream.
+
+{
+  const project = {
+    parameters: [],
+    nodes: [{ id: 'bone', type: 'group', boneRole: 'rightArm' }],
+    actions: [], physicsRules: [],
+  };
+  // I-key (keying-set) shape — `pose.rotation` rnaPath suffix.
+  const action = {
+    fcurves: [{
+      id: 'bone.pose.rotation',
+      rnaPath: 'objects["bone"].pose.rotation',
+      arrayIndex: 0,
+      keyforms: [
+        { time: 0,    value: 0,  easing: 'linear', type: 'linear' },
+        { time: 1000, value: 30, easing: 'linear', type: 'linear' },
+      ],
+      modifiers: [],
+      extrapolation: 'constant',
+    }],
+  };
+  const graph = buildDepGraph(project, { action });
+  const poseOverrides = new Map();
+  evalDepGraph(graph, {
+    project, timeMs: 500, action, poseOverrides,
+  });
+  const boneMap = poseOverrides.get('bone');
+  assert(boneMap instanceof Map,
+    'pose.rotation fcurve: poseOverrides has bone entry');
+  const rotBare = boneMap?.get('rotation');
+  assertNear(rotBare, 15, 1e-6,
+    'pose.rotation fcurve: stored under bare "rotation" channel key');
+  assert(!boneMap?.has('pose.rotation'),
+    'pose.rotation fcurve: NOT stored under prefixed "pose.rotation"');
+
+  // Same coverage on the engine path (CanvasViewport calls this BEFORE
+  // evalProjectFrameViaDepgraph and passes the result as opts.poseOverrides).
+  const ref = computePoseOverrides(action, 500, false, 0);
+  const refEntry = ref.get('bone');
+  assert(refEntry && typeof refEntry === 'object',
+    'computePoseOverrides: bone entry present');
+  assertNear(refEntry?.rotation, 15, 1e-6,
+    'computePoseOverrides: pose.rotation normalised to bare "rotation"');
+  assert(!('pose.rotation' in (refEntry ?? {})),
+    'computePoseOverrides: NOT stored under prefixed "pose.rotation"');
+}
+
+// Non-bone twin — `transform.rotation` suffix on a part. Same
+// normalisation expected.
+{
+  const project = {
+    parameters: [],
+    nodes: [{ id: 'part', type: 'part' }],
+    actions: [], physicsRules: [],
+  };
+  const action = {
+    fcurves: [{
+      id: 'part.transform.rotation',
+      rnaPath: 'objects["part"].transform.rotation',
+      arrayIndex: 0,
+      keyforms: [
+        { time: 0,    value: 0,  easing: 'linear', type: 'linear' },
+        { time: 1000, value: 45, easing: 'linear', type: 'linear' },
+      ],
+      modifiers: [],
+      extrapolation: 'constant',
+    }],
+  };
+  const graph = buildDepGraph(project, { action });
+  const poseOverrides = new Map();
+  evalDepGraph(graph, {
+    project, timeMs: 500, action, poseOverrides,
+  });
+  const partMap = poseOverrides.get('part');
+  assert(partMap instanceof Map,
+    'transform.rotation fcurve: poseOverrides has part entry');
+  assertNear(partMap?.get('rotation'), 22.5, 1e-6,
+    'transform.rotation fcurve: stored under bare "rotation" channel key');
+  assert(!partMap?.has('transform.rotation'),
+    'transform.rotation fcurve: NOT stored under prefixed key');
+}
+
 // ---- mesh_verts fcurve returns undefined (deferred to Phase N-3) ----
 //
 // Note: the v36 migration drops mesh_verts keyforms (their value is an

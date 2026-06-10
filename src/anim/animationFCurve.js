@@ -291,6 +291,56 @@ export function decodeFCurveTarget(fcurve) {
 }
 
 /**
+ * Normalize an fcurve `target.property` to the canonical channel key the
+ * pose-override layer uses everywhere downstream (depgraph
+ * `applyPoseOverrides`, CanvasViewport `kfOv[ch]` reads, GizmoOverlay
+ * `applyOverrideToNode`, draftPose entries).
+ *
+ * Strips the RNA routing prefix:
+ *   - `pose.rotation`      → `rotation`   (bone branch)
+ *   - `pose.x` / `pose.y`  → `x` / `y`    (bone branch)
+ *   - `pose.scaleX|Y`      → `scaleX|Y`   (bone branch)
+ *   - `transform.rotation` → `rotation`   (non-bone branch)
+ *   - `transform.x` / `.y` → `x` / `y`    (non-bone branch)
+ *   - `transform.scaleX|Y` → `scaleX|Y`   (non-bone branch)
+ *
+ * Channel-only properties (`opacity`, `visible`, `mesh_verts`,
+ * `blendShape:<id>`, etc.) are returned unchanged.
+ *
+ * # Why this exists
+ *
+ * Two FCurve-creation paths emit different RNA prefixes for the same
+ * channel:
+ *
+ *   - `renderer/insertAllProperties.js` (K-key path) iterates
+ *     `KEYFRAME_PROPS = ['x', 'y', 'rotation', 'scaleX', 'scaleY', ...]`
+ *     (bare) and emits `objects["<id>"].<bare>` rnaPaths.
+ *   - `anim/keyingSets.js` built-in sets (I-key path) emit RNA-faithful
+ *     prefixed rnaPaths: `objects["<bone>"].pose.rotation` for bones,
+ *     `objects["<part>"].transform.rotation` for parts.
+ *
+ * Without normalisation, the K-key fcurve produces `{ rotation: v }` in
+ * the override map but the I-key fcurve produces `{ "pose.rotation": v }`.
+ * The depgraph's `buildPoseOverrideIndex` and `applyPoseOverrides`
+ * only look for bare channel names, so the I-key path's bone/part pose
+ * animation never reaches skinning — the skeleton overlay moves but
+ * the mesh stays at rest.
+ *
+ * Normalising at the writer (every site that stores by `target.property`)
+ * is the one-place fix; the consumer contract (channel-only keys) stays
+ * stable.
+ *
+ * @param {string} property
+ * @returns {string}
+ */
+export function normalizePoseOverrideKey(property) {
+  if (typeof property !== 'string') return property;
+  if (property.startsWith('pose.')) return property.slice(5);
+  if (property.startsWith('transform.')) return property.slice(10);
+  return property;
+}
+
+/**
  * @param {FCurve} fcurve
  * @param {string} paramId
  * @returns {boolean}

@@ -34,7 +34,7 @@
 import { registerNodeType } from '../registry.js';
 import { SocketType, SocketInOut } from '../types.js';
 import { interpolateTrack } from '../../../renderer/animationEngine.js';
-import { decodeFCurveTarget } from '../../animationFCurve.js';
+import { decodeFCurveTarget, normalizePoseOverrideKey } from '../../animationFCurve.js';
 
 registerNodeType({
   typeId: 'FCurveStrip',
@@ -65,7 +65,9 @@ registerNodeType({
       if (poseOverrides instanceof Map) {
         let entry = poseOverrides.get(target.nodeId);
         if (!entry) { entry = new Map(); poseOverrides.set(target.nodeId, entry); }
-        entry.set(target.property, value);
+        // Mirror the depgraph ANIMATION_TRACK_EVAL kernel — bare channel
+        // names only. See `normalizePoseOverrideKey`.
+        entry.set(normalizePoseOverrideKey(target.property), value);
       }
     }
     return value;

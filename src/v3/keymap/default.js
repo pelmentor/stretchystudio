@@ -138,6 +138,15 @@ export const DEFAULT_KEYMAP = {
   // reserved by the browser and may not be interceptable; works in the
   // desktop app.
   'Ctrl+Tab': 'mode.menu',
+  // Shift+Tab — browser-safe alias for `mode.menu`. Chrome reserves
+  // Ctrl+Tab for tab-switching and the page can't preventDefault on it,
+  // so web-app users have no way to toggle Pose Mode via the Blender
+  // chord. Shift+Tab is interceptable from the page (it only affects
+  // form-element focus order, which the SS canvas doesn't host) and is
+  // close enough to Ctrl+Tab for muscle-memory carryover. Mirrors the
+  // dual-binding pattern Blender plugins use to live alongside DE
+  // hotkeys.
+  'Shift+Tab': 'mode.menu',
 
   // BVR-007 — N toggles the right-edge tool-settings panel. Blender's
   // canonical "show/hide N-panel" gesture. Bare N (no modifier) so it

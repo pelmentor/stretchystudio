@@ -43,7 +43,7 @@
  */
 
 import { evaluateFCurve } from '../../fcurve.js';
-import { decodeFCurveTarget } from '../../animationFCurve.js';
+import { decodeFCurveTarget, normalizePoseOverrideKey } from '../../animationFCurve.js';
 import { isFCurveEffectivelyMuted } from '../../fcurveGroups.js';
 
 /**
@@ -98,7 +98,12 @@ export function kernelAnimationTrackEval(op, ctx) {
     if (poseOverrides instanceof Map) {
       let entry = poseOverrides.get(target.nodeId);
       if (!entry) { entry = new Map(); poseOverrides.set(target.nodeId, entry); }
-      entry.set(target.property, value);
+      // Normalise to bare channel name so TRANSFORM_COMPOSE's
+      // `applyPoseOverrides` (which probes `ov.has('rotation')` etc.)
+      // sees the channel regardless of whether the fcurve was created
+      // via the K-key (bare) or I-key/keying-set (`pose.<ch>` /
+      // `transform.<ch>`) path. See `normalizePoseOverrideKey`.
+      entry.set(normalizePoseOverrideKey(target.property), value);
     }
   }
   return value;

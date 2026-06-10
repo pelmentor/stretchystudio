@@ -23,7 +23,7 @@
  */
 
 import { isBoneGroup, getBonePose, setBonePose } from '../store/objectDataAccess.js';
-import { decodeFCurveTarget, makeBezTripleKeyform } from '../anim/animationFCurve.js';
+import { decodeFCurveTarget, makeBezTripleKeyform, normalizePoseOverrideKey } from '../anim/animationFCurve.js';
 import { isFCurveEffectivelyMuted } from '../anim/fcurveGroups.js';
 import { recalcKeyformHandles } from '../anim/fcurveHandles.js';
 import { evaluateBezTripleSegment, evaluateBezTripleParam } from '../anim/fcurveEval.js';
@@ -234,7 +234,12 @@ export function computePoseOverrides(action, timeMs, loopKeyframes = false, endM
     if (value === undefined) continue;
 
     if (!overrides.has(target.nodeId)) overrides.set(target.nodeId, {});
-    overrides.get(target.nodeId)[target.property] = value;
+    // Normalise `pose.<ch>` / `transform.<ch>` → bare `<ch>`. The override
+    // map's downstream consumers (CanvasViewport kfOv reads, depgraph
+    // `buildPoseOverrideIndex`, `applyPoseOverrides`, GizmoOverlay) all
+    // address channels by bare name. See `normalizePoseOverrideKey` in
+    // `anim/animationFCurve.js` for the writer-mismatch background.
+    overrides.get(target.nodeId)[normalizePoseOverrideKey(target.property)] = value;
   }
 
   return overrides;
