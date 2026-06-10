@@ -1174,22 +1174,26 @@ export function TimelineEditor() {
   }, []);
 
   /* ── Wheel zoom/pan + Home view-fit (Blender V2D parity) ─────────────── */
-  // Modifier-discriminated wheel:
-  //   - Ctrl+wheel = horizontal zoom around the cursor frame (Blender's
-  //     wheel-in/out behavior in V2D when not scrolling).
-  //   - Shift+wheel = horizontal pan (scrolls the view left/right by a
-  //     fraction of the current span).
-  //   - Plain wheel = browser default vertical scroll over the track
-  //     rows (we don't preventDefault, so the scroll container handles
-  //     it). The Timeline routinely has many rows visible — vertical
-  //     scroll is essential UX.
+  // Blender's V2D DopeSheet/Timeline binds plain wheel to zoom (NDOF +
+  // mouse wheel events both route through `view2d_zoom_exec` via the
+  // `VIEW2D_OT_zoom*` operator family — see
+  // `editors/interface/view2d_ops.cc`). SS mirrors:
+  //   - Plain wheel (no modifier) = horizontal zoom around the cursor.
+  //   - Ctrl/Cmd+wheel = horizontal zoom around the cursor (alias).
+  //   - Shift+wheel = horizontal pan.
   // Home key resets the view to the anim bounds + clears the dirty
   // latch so future anim-bound UI edits re-sync.
+  //
+  // NOTE: we preventDefault on every wheel event over the editor. The
+  // Timeline's vertical real estate is bounded (one row per animated
+  // node/param, typically <30) so we don't need vertical scroll —
+  // pre-fix users couldn't zoom without holding Ctrl, which is the
+  // opposite of Blender's default and confused everyone landing here
+  // from Blender muscle-memory.
   useEffect(() => {
     const onWheel = (e) => {
       if (!hoverRef.current) return;
       if (!rulerRef.current) return;
-      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;   // pass-through for plain wheel
       e.preventDefault();
       const rect = rulerRef.current.getBoundingClientRect();
       const trackW = Math.max(1, rect.width - 2 * TRACK_PAD);
@@ -1199,7 +1203,7 @@ export function TimelineEditor() {
       const span = view.end - view.start;
       viewDirtyRef.current = true;
       if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        // Pan: scroll by ~10% of span per typical wheel notch.
+        // Shift+wheel = horizontal pan.
         const panFrames = (e.deltaY * span) / (trackW * 0.5);
         setViewBounds({
           start: view.start + panFrames,
@@ -1207,7 +1211,8 @@ export function TimelineEditor() {
         });
         return;
       }
-      // Ctrl/Cmd+wheel = zoom around cursor frame. deltaY > 0 = zoom out.
+      // Plain wheel or Ctrl/Cmd+wheel = zoom around cursor frame.
+      // deltaY > 0 = zoom out.
       const zoomFactor = Math.exp(e.deltaY * 0.001);
       const newSpan = Math.max(2, Math.min(50_000, span * zoomFactor));
       const cursorFrame = view.start + frac * span;
@@ -1281,14 +1286,21 @@ export function TimelineEditor() {
   useAudioSync(animation, isPlaying, loopCount);
 
   /* ── Timeline pixel helpers ─────────────────────────────────────────── */
-  // clientX to global frame mapping, respecting zoom
+  // clientX → global frame, respecting zoom. NOT clamped to view bounds
+  // — the drag handler needs unclamped frames so the user can drag a
+  // selection past the view edge without the delta freezing at the
+  // boundary. Callers that genuinely need a view-bound frame (ruler
+  // click, box-select, playhead seek) wrap the return with their own
+  // `clamp(...)` against the anim bounds. Pre-fix `xToFrame` clamped
+  // to view → cursor exiting the view edge froze the drag delta, which
+  // felt like the drag was "sticky" or "jittery" and was a major source
+  // of the corruption-looking visual reports.
   const xToFrame = useCallback((clientX) => {
     if (!rulerRef.current) return startFrame;
     const rect = rulerRef.current.getBoundingClientRect();
-    // width is the inner width of ruler track (zoom factored in since ruler scales)
     const localX = clientX - rect.left - TRACK_PAD;
-    const trackW = rect.width - 2 * TRACK_PAD;
-    const frac = clamp(localX / trackW, 0, 1);
+    const trackW = Math.max(1, rect.width - 2 * TRACK_PAD);
+    const frac = localX / trackW;
     return Math.round(startFrame + frac * totalFrames);
   }, [startFrame, totalFrames]);
 
@@ -2080,8 +2092,19 @@ export function TimelineEditor() {
                 {/* Keyframe diamonds — padded inner wrapper */}
                 <div className="relative flex-1 overflow-visible">
                   <div className="absolute inset-y-0" style={{ left: TRACK_PAD, right: TRACK_PAD }}>
-                    {/* Curve interpolation lines */}
-                    <svg className="absolute inset-y-0 w-full h-full pointer-events-none z-10" viewBox="0 0 100 10" preserveAspectRatio="none">
+                    {/* Curve interpolation lines. HIDDEN mid-drag — the
+                        SVG paths are anchored to the ORIGINAL kf times
+                        (the project hasn't been mutated yet); leaving
+                        them visible while diamonds float to their
+                        ghost positions reads as "two sets of keyframes"
+                        / "garbage" (user report 2026-06-10 pt6).
+                        Re-renders cleanly after pointerup commits. */}
+                    <svg
+                      className="absolute inset-y-0 w-full h-full pointer-events-none z-10"
+                      viewBox="0 0 100 10"
+                      preserveAspectRatio="none"
+                      style={{ opacity: dragGhost ? 0 : 1 }}
+                    >
                       {row.times.map((tA, i) => {
                          if (i >= row.times.length - 1) return null;
                          const tB = row.times[i+1];
@@ -2157,7 +2180,11 @@ export function TimelineEditor() {
                                 'rotate-45 border transition-colors z-20 keyframe-diamond',
                                 isSelected ? 'bg-primary border-primary shadow-[0_0_4px_rgba(255,255,255,0.5)]'
                                   : 'bg-background border-primary/60 hover:bg-primary/40',
-                                isDragging ? 'ring-2 ring-amber-300/80' : '',
+                                // Scale up + amber ring while dragging so
+                                // the user can track the ghost diamond
+                                // even when other (non-dragged) diamonds
+                                // are nearby.
+                                isDragging ? 'ring-2 ring-amber-300/80 scale-125' : '',
                               ].join(' ')}
                               style={{ left: frameToPercentage(frame) }}
                             />

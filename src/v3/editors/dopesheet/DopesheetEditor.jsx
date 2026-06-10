@@ -1229,16 +1229,15 @@ export function DopesheetEditor() {
   }, [grabState !== null]);
 
   /* ── Wheel zoom/pan + Home view-fit (Blender V2D parity) ─────────────── */
-  // Modifier-discriminated wheel — see TimelineEditor for prose.
-  //   - Plain wheel: browser default (vertical scroll over track rows).
-  //   - Ctrl/Cmd+wheel: horizontal zoom around the cursor's ms position.
+  // Blender's V2D wheel binding — see TimelineEditor for prose + cite.
+  //   - Plain wheel: horizontal zoom around the cursor's ms position.
+  //   - Ctrl/Cmd+wheel: horizontal zoom (alias).
   //   - Shift+wheel: horizontal pan.
   // Home (hover-gated) clears the dirty latch and refits to [0, duration].
   useEffect(() => {
     const onWheel = (e) => {
       if (!hoverRef.current) return;
       if (!trackAreaRef.current) return;
-      if (!e.ctrlKey && !e.metaKey && !e.shiftKey) return;
       e.preventDefault();
       const rect = trackAreaRef.current.getBoundingClientRect();
       const tickAreaWidth = Math.max(1, rect.width - LABEL_W);
@@ -1252,7 +1251,7 @@ export function DopesheetEditor() {
         setViewBounds({ start: view.start + panMs, end: view.end + panMs });
         return;
       }
-      // Ctrl/Cmd+wheel zoom. deltaY > 0 = zoom out.
+      // Plain wheel or Ctrl/Cmd+wheel zoom. deltaY > 0 = zoom out.
       const zoomFactor = Math.exp(e.deltaY * 0.001);
       const newSpan = Math.max(50, Math.min(10_000_000, span * zoomFactor));
       const cursorMs = view.start + frac * span;
