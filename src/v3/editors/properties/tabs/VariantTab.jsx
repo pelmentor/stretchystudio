@@ -31,6 +31,7 @@
 import { Layers, Eye, Link, ArrowRight } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
+import { selectAndMirror } from '../../../../lib/selectionSync.js';
 import { matchTag } from '../../../../io/armatureOrganizer.js';
 import { DEFAULT_BACKDROP_TAGS } from '../../../../io/live2d/rig/variantFadeRules.js';
 
@@ -124,7 +125,7 @@ export function VariantTab({ nodeId }) {
               <button
                 key={c.id}
                 type="button"
-                onClick={() => select({ type: 'part', id: c.id }, 'replace')}
+                onClick={() => selectAndMirror({ type: 'part', id: c.id }, 'replace')}
                 className="flex items-center justify-between gap-2 text-[11px] font-mono px-1.5 py-1 rounded hover:bg-muted/40 transition-colors text-left"
                 title={`Open ${c.name ?? c.id}`}
               >

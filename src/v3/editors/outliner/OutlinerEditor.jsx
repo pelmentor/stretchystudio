@@ -46,6 +46,7 @@ import { useProjectStore } from '../../../store/projectStore.js';
 import { useSelectionStore } from '../../../store/selectionStore.js';
 import { useRigSpecStore } from '../../../store/rigSpecStore.js';
 import { useEditorStore } from '../../../store/editorStore.js';
+import { selectAndMirror } from '../../../lib/selectionSync.js';
 import { buildOutlinerTree, walkOutlinerTree } from './treeBuilder.js';
 import { isBoneGroup } from '../../../store/objectDataAccess.js';
 import { isWarpLatticeNode } from '../../../store/warpLatticeAccess.js';
@@ -64,7 +65,15 @@ export function OutlinerEditor() {
   const rigSpec = useRigSpecStore((s) => s.rigSpec);
 
   const items = useSelectionStore((s) => s.items);
-  const select = useSelectionStore((s) => s.select);
+  // 2026-06-10 selection-split fix. Outliner clicks used to write only
+  // to `useSelectionStore` (typed items), leaving `editorStore.selection`
+  // stale. The Gizmo / Properties / canvas-modal G/R/S read editorStore,
+  // so picking a bone in the Outliner left the gizmo pointed at the
+  // PREVIOUS selection — user pressed R and rotated a different bone
+  // than the one highlighted in the canvas. Route every Outliner
+  // selection write through `selectAndMirror` so the two stores stay
+  // in sync (no-op for non-node types like deformers).
+  const select = useSelectionStore((s) => s.select);  // retained for legacy callers below
 
   // PP2-010(b) — per-warp visibility map. Rig-mode warp rows surface
   // an eye icon that flips this entry; WarpDeformerOverlay reads the
@@ -191,7 +200,7 @@ export function OutlinerEditor() {
           /** @type {any} */ (found).children?.[0]
         );
         if (!firstChild) return;
-        select({ type: 'group', id: firstChild.id }, modifier);
+        selectAndMirror({ type: 'group', id: firstChild.id }, modifier);
         return;
       }
       const ft = /** @type {import('./treeBuilder.js').OutlinerNode} */ (found).type;
@@ -199,9 +208,13 @@ export function OutlinerEditor() {
       else if (ft === 'group') type = 'group';
       else if (ft === 'deformer') type = 'deformer';
       else if (ft === 'object') type = 'object'; // v43 lattice (warp) object
-      select({ type, id }, modifier);
+      // `selectAndMirror` only mirrors `'part' | 'group'` into the
+      // legacy editorStore slot; deformer and v43 lattice `object`
+      // writes update only the universal store, which is the correct
+      // scope for them.
+      selectAndMirror({ type, id }, modifier);
     },
-    [filteredRoots, select],
+    [filteredRoots],
   );
 
   const onToggleExpand = useCallback((id) => {

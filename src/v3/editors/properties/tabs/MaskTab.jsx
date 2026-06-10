@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { Layers, Plus, X } from 'lucide-react';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
+import { selectAndMirror } from '../../../../lib/selectionSync.js';
 import { markUserAuthored } from '../../../../io/live2d/rig/userAuthorMarkers.js';
 import { getMesh, isMeshedPart } from '../../../../store/objectDataAccess.js';
 
@@ -104,7 +105,7 @@ export function MaskTab({ nodeId }) {
                 <NodeChip
                   key={m.id}
                   node={m}
-                  onClick={() => select({ type: 'part', id: m.id }, 'replace')}
+                  onClick={() => selectAndMirror({ type: 'part', id: m.id }, 'replace')}
                   onRemove={() => removeMask(m.id)}
                 />
               ))
@@ -143,7 +144,7 @@ export function MaskTab({ nodeId }) {
                 <NodeChip
                   key={m.id}
                   node={m}
-                  onClick={() => select({ type: 'part', id: m.id }, 'replace')}
+                  onClick={() => selectAndMirror({ type: 'part', id: m.id }, 'replace')}
                 />
               ))}
             </div>
