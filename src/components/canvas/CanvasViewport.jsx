@@ -1782,15 +1782,43 @@ export default function CanvasViewport({
 
       const ed = editorRef.current;
       const anim = useAnimationStore.getState();
-      if (getEditorMode() !== 'animation') return;
+      // Silent return for SYNTHETIC K events (`runAutoKey('all')` fires
+      // through here every tick when auto-key Mode = All); only the user-
+      // initiated press deserves diagnostic toasts. Same convention as
+      // the K-first-use toast gate below.
+      if (getEditorMode() !== 'animation') {
+        if (!e.__ssAutoKey) {
+          toast({
+            title: 'Insert Keyframe (K)',
+            description: 'Switch to the Animation workspace to insert keyframes.',
+          });
+        }
+        return;
+      }
 
       const proj = projectRef.current;
-      if (proj.actions.length === 0) return;
+      if (proj.actions.length === 0) {
+        if (!e.__ssAutoKey) {
+          toast({
+            title: 'Insert Keyframe (K)',
+            description: 'No action exists. Click "+ New" in the Footer to create one.',
+          });
+        }
+        return;
+      }
 
       // Stage 1.E: scene-bound action wins over UI-store fallback;
       // only fall back to first action when neither resolves.
       const actionId = getActiveSceneAction(proj, anim.activeActionId)?.id ?? proj.actions[0]?.id;
-      if (!actionId) return;
+      if (!actionId) {
+        if (!e.__ssAutoKey) {
+          toast({
+            title: 'Insert Keyframe (K)',
+            description: 'No active action — pick one in the Footer action picker.',
+          });
+        }
+        return;
+      }
 
       // Animation Phase 7 Slice 7.G — K-rebind preference. When the user
       // opts into Blender's "K always prompts" semantic
@@ -1811,7 +1839,15 @@ export default function CanvasViewport({
       }
 
       let selectedIds = ed.selection;
-      if (selectedIds.length === 0) return;
+      if (selectedIds.length === 0) {
+        if (!e.__ssAutoKey) {
+          toast({
+            title: 'Insert Keyframe (K)',
+            description: 'Nothing selected — click a part or bone first, then press K.',
+          });
+        }
+        return;
+      }
 
       // Expand selection to include dependent parts for JS skinning joints
       const JSKinningRoles = new Set(['leftElbow', 'rightElbow', 'leftKnee', 'rightKnee']);

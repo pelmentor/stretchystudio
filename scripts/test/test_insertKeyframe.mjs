@@ -284,16 +284,72 @@ ok(fcParamX !== undefined, '§8 — ParamAngleX fcurve in __scene__\'s action');
 eq(fcParamX.keyforms[0].value, 0.5, '§8 — keyform value matches resolver');
 
 // ─────────────────────────────────────────────────────────────────────
-// Section 9 — Object with no animData → skipped-no-action
+// Section 9 — Object with no animData → falls back to scene action
+//
+// SS's v36 migration leaves every node's `animData.actionId` null (the
+// "consumers fall back to the UI store's `activeActionId`" model). When
+// a `__scene__` binding exists, `applyKeyingSet` routes the object's
+// channels into the scene action — without this, I-key never inserts
+// anything for bones / parts.
 // ─────────────────────────────────────────────────────────────────────
 
 let project9 = makeProject();
 const r9 = applyKeyingSet(project9, 'Location', ['partB'], 100, INSERTKEY_FLAGS.NOFLAGS, {
   resolveValue: (path) => path === 'objects["partB"].transform.x' ? 1 : 2,
 });
-eq(r9.count, 0, '§9 — no animData → count = 0');
-eq(r9.skippedNoAction, 2, '§9 — 2 channels skipped (no action)');
-eq(r9.results[0].status, 'skipped-no-action', '§9 — status = skipped-no-action');
+eq(r9.count, 2, '§9 — no animData → falls back to scene action; 2 channels written');
+eq(r9.skippedNoAction, 0, '§9 — scene fallback applied; no skipped-no-action');
+eq(r9.results[0].status, 'created-fcurve',
+  '§9 — partB path routed into __scene__.sceneAct (created-fcurve)');
+const sceneAct9 = project9.actions.find((a) => a.id === 'sceneAct');
+const partBx = sceneAct9.fcurves.find((f) => f.rnaPath === 'objects["partB"].transform.x');
+ok(partBx !== undefined, '§9 — partB.x fcurve materialised on __scene__.sceneAct');
+eq(partBx.keyforms[0].value, 1, '§9 — keyform value matches resolver');
+
+// §9b — when neither per-node animData NOR scene binding exists,
+// AND no `fallbackActionId` is supplied, the channel returns
+// skipped-no-action. Same shape as the old §9 expectation, but
+// re-grounded on the new contract: the skip only fires when EVERY
+// fallback exhausts.
+const project9b = {
+  nodes: [
+    { id: 'partB', type: 'part', name: 'PartB' },  // no animData
+  ],
+  actions: [
+    { id: 'someAct', name: 'SomeAction', fcurves: [] },
+  ],
+  parameters: [],
+  keyingSets: [],
+  activeKeyingSetId: null,
+};
+const r9b = applyKeyingSet(project9b, 'Location', ['partB'], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: () => 1,
+});
+eq(r9b.count, 0, '§9b — no scene + no fallback → count = 0');
+eq(r9b.skippedNoAction, 2, '§9b — 2 channels skipped-no-action');
+eq(r9b.results[0].status, 'skipped-no-action', '§9b — status = skipped-no-action');
+
+// §9c — `fallbackActionId` option (UI's `activeActionId`) routes the
+// channel when neither per-node animData nor scene binding exists.
+// Mirrors `insertKey.execApplyKeyingSet`'s wire-up.
+const project9c = {
+  nodes: [
+    { id: 'partB', type: 'part', name: 'PartB' },
+  ],
+  actions: [
+    { id: 'uiAct', name: 'UIPickedAction', fcurves: [] },
+  ],
+  parameters: [],
+  keyingSets: [],
+  activeKeyingSetId: null,
+};
+const r9c = applyKeyingSet(project9c, 'Location', ['partB'], 100, INSERTKEY_FLAGS.NOFLAGS, {
+  resolveValue: () => 7,
+  fallbackActionId: 'uiAct',
+});
+eq(r9c.count, 2, '§9c — fallbackActionId routes the channel; 2 written');
+const uiAct9c = project9c.actions.find((a) => a.id === 'uiAct');
+eq(uiAct9c.fcurves.length, 2, '§9c — both fcurves landed on uiAct');
 
 // ─────────────────────────────────────────────────────────────────────
 // Section 10 — Non-finite current value → skipped-non-finite
@@ -374,11 +430,13 @@ ok(wouldApplyKeyingSetChange(project12, 'Location', ['partA'], 999,
     resolveValue: resolver,
   }) === false, '§12 — REPLACE on non-existing time → would NOT change');
 
-// AVAILABLE on no-fcurve → no change
+// partB has no animData — but scene binding falls through, so a fresh
+// insert WOULD land on sceneAct (post-fix semantic; pre-fix this was
+// false because no-animData hard-skipped).
 ok(wouldApplyKeyingSetChange(project12, 'Location', ['partB'], 100,
   INSERTKEY_FLAGS.NOFLAGS, {
     resolveValue: () => 1,
-  }) === false, '§12 — partB has no animData → would NOT change');
+  }) === true, '§12 — partB scene-fallback → would change (writes to sceneAct)');
 
 // ─────────────────────────────────────────────────────────────────────
 // Section 13 — Bone path: pose.* routing

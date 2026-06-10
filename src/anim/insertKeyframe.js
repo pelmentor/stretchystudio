@@ -113,6 +113,7 @@ import {
   makeBezTripleKeyform,
 } from './animationFCurve.js';
 import { recalcKeyformHandles } from './fcurveHandles.js';
+import { getSceneAction } from './sceneAction.js';
 
 /**
  * Insert-keyframe flag bitset. Subset of Blender's `eInsertKeyFlags`
@@ -133,16 +134,37 @@ const VALUE_EPSILON = 1e-4;
 const TIME_EPSILON_MS = 0.5;
 
 /**
- * Resolve which Action a given rnaPath should write to. Object-owned
- * paths use `node.animData.actionId`; `__params__` and `__scene__`
- * paths route to the `__scene__` pseudo-Object (DEV 28). Returns the
- * action object, or `null` if no action is bound.
+ * Resolve which Action a given rnaPath should write to.
+ *
+ * Resolution order (matches CanvasViewport's K-key write path + every
+ * other scene-action consumer in SS):
+ *
+ *   1. Per-Object `node.animData.actionId` — Blender's per-datablock
+ *      adt model. Wins when set so Phase 2+ per-Object adt evaluation
+ *      (skeletal Armature alongside the scene's facial action) keeps
+ *      its own binding.
+ *   2. Scene-bound action — `__scene__.animData.actionId` via
+ *      `getSceneAction(project)`. SS's v36 migration deliberately
+ *      leaves every node's `animData.actionId` null (see
+ *      `migrations/v36_action_datablock.js:392-403`: "consumers fall
+ *      back to the UI store's `activeActionId`"). For today's "one
+ *      scene action drives everything" shape, the scene binding is
+ *      the right fallback — without this fallback, every keying-set
+ *      channel on an object-owned path returns `skipped-no-action`
+ *      and I-key never inserts anything for bones / parts.
+ *   3. Optional `fallbackActionId` (UI-store `activeActionId`) — when
+ *      the project has no scene binding yet but the user is editing
+ *      one via the action picker. Mirrors `getActiveSceneAction`'s
+ *      tail fallback.
+ *
+ * Returns the action object, or `null` if no action is bound anywhere.
  *
  * @param {object} project
  * @param {string} rnaPath
+ * @param {string|null} [fallbackActionId]
  * @returns {{action: object, ownerNodeId: string} | null}
  */
-function resolveTargetAction(project, rnaPath) {
+function resolveTargetAction(project, rnaPath, fallbackActionId) {
   if (!project || typeof rnaPath !== 'string') return null;
   // Use decodeFCurveTarget's regexes against a fake fcurve to extract
   // the object id. Reusing the canonical decoder keeps the rnaPath
@@ -159,12 +181,38 @@ function resolveTargetAction(project, rnaPath) {
     ownerNodeId = decoded.nodeId === '__scene__' ? '__scene__' : decoded.nodeId;
   }
   const node = nodes.find((n) => n?.id === ownerNodeId);
-  if (!node) return null;
+  if (!node) {
+    // Owner not in nodes — only legal for the synthetic `__scene__`
+    // pseudo-Object when it isn't materialised yet. Fall straight to
+    // the scene-bound action.
+    if (ownerNodeId !== '__scene__') return null;
+    const scene = getSceneAction(project);
+    if (scene) return { action: scene, ownerNodeId };
+    if (typeof fallbackActionId === 'string' && fallbackActionId.length > 0) {
+      const fb = actions.find((a) => a?.id === fallbackActionId);
+      if (fb) return { action: fb, ownerNodeId };
+    }
+    return null;
+  }
   const actionId = node.animData?.actionId;
-  if (!actionId) return null;
-  const action = actions.find((a) => a?.id === actionId);
-  if (!action) return null;
-  return { action, ownerNodeId };
+  if (actionId) {
+    const action = actions.find((a) => a?.id === actionId);
+    if (action) return { action, ownerNodeId };
+    return null;
+  }
+  // Per-node animData isn't bound (the v36 default). Route to the
+  // scene-bound action — that's what every other consumer in SS does
+  // (CanvasViewport K-key, SkeletonOverlay keyframeOverrides, depgraph
+  // viewport eval). Without this, applyKeyingSet returns
+  // `skipped-no-action` for every object channel because nodes never
+  // carry their own actionId today.
+  const scene = getSceneAction(project);
+  if (scene) return { action: scene, ownerNodeId };
+  if (typeof fallbackActionId === 'string' && fallbackActionId.length > 0) {
+    const fb = actions.find((a) => a?.id === fallbackActionId);
+    if (fb) return { action: fb, ownerNodeId };
+  }
+  return null;
 }
 
 /**
@@ -342,6 +390,9 @@ export function applyKeyingSet(project, setId, objectIds, time, flags, options) 
   const ids = Array.isArray(objectIds) ? objectIds : [];
   const f = typeof flags === 'number' ? flags : INSERTKEY_FLAGS.NOFLAGS;
   const resolve = options?.resolveValue ?? ((path) => /** @type {number|undefined} */ (evaluateRnaPath(project, path)));
+  const fallbackActionId = typeof options?.fallbackActionId === 'string'
+    ? options.fallbackActionId
+    : null;
   const channels = collectChannels(project, set, ids);
   /** @type {Array<{path:string, status:string, fcurveId?:string, ownerNodeId?:string}>} */
   const results = [];
@@ -350,7 +401,7 @@ export function applyKeyingSet(project, setId, objectIds, time, flags, options) 
   let skippedInvalidPath = 0;
   for (const ch of channels) {
     const path = ch.path;
-    const target = resolveTargetAction(project, path);
+    const target = resolveTargetAction(project, path, fallbackActionId);
     if (!target) {
       // Either path doesn't decode OR owner has no animData.actionId.
       // Distinguish for diagnostics: probe decodeFCurveTarget.
@@ -415,9 +466,12 @@ export function wouldApplyKeyingSetChange(project, setId, objectIds, time, flags
   const ids = Array.isArray(objectIds) ? objectIds : [];
   const f = typeof flags === 'number' ? flags : INSERTKEY_FLAGS.NOFLAGS;
   const resolve = options?.resolveValue ?? ((path) => /** @type {number|undefined} */ (evaluateRnaPath(project, path)));
+  const fallbackActionId = typeof options?.fallbackActionId === 'string'
+    ? options.fallbackActionId
+    : null;
   const channels = collectChannels(project, set, ids);
   for (const ch of channels) {
-    const target = resolveTargetAction(project, ch.path);
+    const target = resolveTargetAction(project, ch.path, fallbackActionId);
     if (!target) continue;
     const currentValue = resolve(ch.path);
     if (!Number.isFinite(currentValue)) continue;

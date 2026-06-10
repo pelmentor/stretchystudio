@@ -1238,6 +1238,14 @@ export function DopesheetEditor() {
     const onWheel = (e) => {
       if (!hoverRef.current) return;
       if (!trackAreaRef.current) return;
+      // Channel-list column scrolls natively; only the keyframe-track
+      // area zooms. Mirrors Blender's per-region wheel behaviour (see
+      // the matching gate in TimelineEditor.jsx onWheel). Without this
+      // gate, wheel-over-channels zoomed the V2D instead of scrolling
+      // the row list, which broke Blender muscle memory on tall actions
+      // (40+ params, mouse hovering "Brow L Y" wanted scroll-down).
+      const containerRect = trackAreaRef.current.getBoundingClientRect();
+      if (e.clientX < containerRect.left + LABEL_W) return;
       e.preventDefault();
       const rect = trackAreaRef.current.getBoundingClientRect();
       const tickAreaWidth = Math.max(1, rect.width - LABEL_W);

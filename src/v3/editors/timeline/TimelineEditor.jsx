@@ -1194,6 +1194,16 @@ export function TimelineEditor() {
     const onWheel = (e) => {
       if (!hoverRef.current) return;
       if (!rulerRef.current) return;
+      // Channel-list column scrolls natively; only the keyframe-track
+      // area zooms. Mirrors Blender's per-region wheel behaviour:
+      // wheel over the channels region of the Dopesheet / Timeline
+      // editor scrolls the channel list, wheel over the keyframe
+      // region zooms the V2D. SS has a single scroll container so we
+      // gate by cursor X against the label column width; if the
+      // cursor is over the labels, fall through to the native scroll
+      // (don't preventDefault).
+      const containerRect = trackAreaEl.getBoundingClientRect();
+      if (e.clientX < containerRect.left + LABEL_W) return;
       e.preventDefault();
       const rect = rulerRef.current.getBoundingClientRect();
       const trackW = Math.max(1, rect.width - 2 * TRACK_PAD);

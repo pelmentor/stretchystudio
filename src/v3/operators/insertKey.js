@@ -156,6 +156,13 @@ export function execApplyKeyingSet(setId) {
     return;
   }
   const paramValues = useParamValuesStore.getState().values;
+  // Stage 1.E fallback: when no node carries `animData.actionId` (the
+  // v36 default) AND no `__scene__` binding exists yet, applyKeyingSet
+  // routes through the UI's current `activeActionId` so I-key picks up
+  // whatever the user is editing in the Footer action picker. Without
+  // this, fresh projects where the user hasn't formally bound an action
+  // to the scene get `skipped-no-action` for every channel.
+  const fallbackActionId = useAnimationStore.getState().activeActionId ?? null;
   /** @type {{count:number, results:Array<{path:string,status:string}>, skippedNoAction:number, skippedInvalidPath:number}} */
   let result = { count: 0, results: [], skippedNoAction: 0, skippedInvalidPath: 0 };
   projectStore.updateProject((draft) => {
@@ -169,7 +176,7 @@ export function execApplyKeyingSet(setId) {
       objectIds,
       time,
       INSERTKEY_FLAGS.NOFLAGS,
-      { resolveValue: resolver },
+      { resolveValue: resolver, fallbackActionId },
     );
   });
   toast({
