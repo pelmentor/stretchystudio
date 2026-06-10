@@ -1145,11 +1145,11 @@ export default function CanvasViewport({
           }
         }
 
-        // Live-preview bone-mirror overlay (2026-06-03 bug-06 fix). Every
-        // bone-mirror param (`ParamRotation_<bone>`) gets injected as a
-        // `{rotation: paramValue}` pose override so the depgraph's
-        // TRANSFORM_COMPOSE seeds the bone's pose from the live param
-        // value WITHOUT mutating `bone.pose.rotation` in projectStore.
+        // PARAM → BONE mirror. Every bone-mirror param
+        // (`ParamRotation_<bone>`) gets injected as a `{rotation: paramValue}`
+        // pose override so the depgraph's TRANSFORM_COMPOSE seeds the
+        // bone's pose from the live param value WITHOUT mutating
+        // `bone.pose.rotation` in projectStore.
         //
         // Mutating projectStore from a per-frame driver would re-fire
         // `rigSpecStore.js:265`'s subscriber, regenerate the rigSpec
@@ -1162,10 +1162,27 @@ export default function CanvasViewport({
         // playback) ride on top via the override Map. See
         // [[physics-bone-mirror-overlay]].
         //
-        // Animation mode (above) wins on the same bone: if the action
-        // already set a `rotation` override, we skip — keyframe authoring
-        // is more explicit than live physics overlay.
-        if (previewModeRef.current) {
+        // **2026-06-11 — runs in ALL viewport modes (was preview-only).**
+        // Pre-fix this was gated on `previewModeRef.current`, so the
+        // Parameters-panel `ParamRotation_<bone>` slider only deformed
+        // the mesh in Live Preview. In editor mode (staging /
+        // animation) the slider did nothing — bones only moved on
+        // skeleton-gesture writes to `bone.pose.rotation`. Dropping
+        // the gate makes the slider an equal first-class input
+        // alongside the gesture in every mode: in staging it acts as
+        // a live overlay (no projectStore mutation, no undo entry);
+        // in animation it composes with action fcurves via the
+        // `existing.rotation` guard below (action fcurves win).
+        //
+        // No feedback loop with the downstream BONE → PARAM mirror —
+        // the latter reads `poseOverrides[boneId].rotation` first and
+        // mirrors that exact value back into `valuesForEval[paramId]`;
+        // both directions converge on the same number per frame.
+        //
+        // Animation mode wins on the same bone: if an action fcurve
+        // already set a `rotation` override, we skip — keyframe
+        // authoring is more explicit than live slider overlay.
+        {
           const _boneMirror = useParamValuesStore.getState().boneMirror?.byParam;
           if (_boneMirror && _boneMirror.size > 0) {
             for (const [paramId, boneId] of _boneMirror) {

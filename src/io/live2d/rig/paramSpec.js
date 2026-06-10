@@ -279,17 +279,50 @@ export function buildParameterSpec(input = {}) {
     }
   }
 
-  // 5. Bone rotation params — needed by baked-keyform meshes (arms, etc).
-  // Keyed by jointBoneId so a mesh weighted to multiple bones doesn't double up.
+  // 5. Bone rotation params — `ParamRotation_<boneName>` for EVERY bone
+  // group, not just bones that already have weighted meshes.
+  //
+  // **Why every bone (changed 2026-06-11)**: the BONE → PARAM and
+  // PARAM → BONE mirrors at viewport eval setup BOTH key off
+  // `ParamRotation_<sanitisedName>` existing in `project.parameters`.
+  // Pre-2026-06-11 the loop only emitted the param when some mesh
+  // declared `jointBoneId === bone.id`, so bones that the user expected
+  // to drive their mesh via the OVERLAY path (parent-chain rotation,
+  // no per-vertex skinning) had no param — the slider didn't exist in
+  // the Parameters panel, and even bone gestures couldn't mirror back
+  // through the registry. Result: on a fresh PSD wizard, dragging a
+  // bone in pose mode visibly rotated the skeleton overlay, but the
+  // mesh stayed at rest — "bones don't move the character".
+  //
+  // Emitting the param for every bone fixes both directions: the
+  // slider exists for the user to drive the bone, and the bone-mirror
+  // registry registers the bone so the BONE → PARAM seed flows on
+  // every gesture. The OVERLAY composition path
+  // (`pickBonePostChainComposition` returning `'overlay'`) then reads
+  // the resulting `poseOverrides[boneId].rotation` via TRANSFORM_COMPOSE
+  // and applies the bone WORLD matrix — unweighted parts under that
+  // bone follow, weighted parts under that bone go through LBS, both
+  // composed cleanly.
+  //
+  // **Weighted-mesh dedup unchanged**: when a mesh DOES declare
+  // `jointBoneId`, we still mark the bone as `seenBones` first so the
+  // bone-group pass below (block 6, group rotation deformers) keeps
+  // skipping bones that already have a bone param emitted here. Same
+  // de-double behaviour, broader coverage.
   const seenBones = new Set();
+
+  // Two passes so we honour the weighted-mesh "I want this bone to
+  // drive this exact mesh" intent before any unweighted bone gets a
+  // generic param entry. Practically the writes are identical
+  // (boneId → ParamRotation_<boneName>), but the order keeps the
+  // `seenBones` set in sync with the pre-2026-06-11 traversal so
+  // downstream code (block 6, `seenBones.has(g.id)`) sees the same
+  // bones as before.
   for (const m of meshes) {
     if (!m?.jointBoneId || !m?.boneWeights || seenBones.has(m.jointBoneId)) continue;
     seenBones.add(m.jointBoneId);
     const boneGroup = groups.find(g => g.id === m.jointBoneId);
     const boneName = sanitisePartName(boneGroup?.name || m.jointBoneId);
-    // PP2-005 — drop bone-rotation params for bones owned by an opted-out
-    // subsystem. Heuristic by name (auto-rig naming convention contains
-    // the subsystem keyword in the bone group's name, e.g. front_hair_root).
     if (subsystems) {
       const lower = (boneGroup?.name ?? boneName).toLowerCase();
       if (subsystems.hairRig === false && /hair/.test(lower)) continue;
@@ -307,6 +340,47 @@ export function buildParameterSpec(input = {}) {
       role: 'bone',
       boneId: m.jointBoneId,
     });
+  }
+
+  // Second pass — every bone group that hasn't been covered by a
+  // weighted mesh above. These get the same param shape (min/max from
+  // `bakedKeyformAngles`, default 0, role='bone') so the bone-mirror
+  // registry treats them identically and slider gestures compose into
+  // poseOverrides the same way.
+  //
+  // Skip-role gating mirrors block 6's `SKIP_ROTATION_ROLES`: torso /
+  // eyes / neck are folded into the body-warp chain (no separate
+  // rotation deformer), so a `ParamRotation_<bone>` for them would
+  // surface a slider in the Parameters panel that drives nothing. The
+  // bone-mirror registry would then point at a no-op control surface,
+  // confusing users (`bones don't move character` symptoms reappear
+  // in a subtler shape). Same gate the rotation-deformer pass uses.
+  if (generateRig) {
+    const SKIP_ROT_BONES = new Set(_SKIP_ROT_ROLES);
+    for (const g of groups) {
+      if (!g?.id || !g.boneRole) continue;
+      if (seenBones.has(g.id)) continue;
+      if (SKIP_ROT_BONES.has(g.boneRole)) continue;
+      const boneName = sanitisePartName(g.name || g.id);
+      if (subsystems) {
+        const lower = (g.name ?? boneName).toLowerCase();
+        if (subsystems.hairRig === false && /hair/.test(lower)) continue;
+        if (subsystems.clothingRig === false
+            && /(top ?wear|bottom ?wear|leg ?wear|skirt|shirt|pants|cloth)/.test(lower)) continue;
+      }
+      seenBones.add(g.id);
+      const id = `ParamRotation_${boneName}`;
+      push({
+        id,
+        name: `Rotation ${g.name ?? g.id}`,
+        min: bakedKeyformAngles[0],
+        max: bakedKeyformAngles[bakedKeyformAngles.length - 1],
+        default: 0,
+        decimalPlaces: 3, repeat: false,
+        role: 'bone',
+        boneId: g.id,
+      });
+    }
   }
 
   // 6. Group rotation params — `ParamRotation_<groupName>` for every non-bone

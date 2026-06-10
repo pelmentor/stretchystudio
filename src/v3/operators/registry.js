@@ -2409,7 +2409,7 @@ function registerBuiltins() {
   // projects — RULE №2). Explicit user trigger only.
   registerOperator({
     id: 'rig.autoSkinUnwiredBones',
-    label: 'Auto-Skin Unwired Bones (force-LBS)',
+    label: 'Auto-Skin Unwired Bones to Nearest Bone',
     available: () => {
       const proj = useProjectStore.getState().project;
       return !!proj && Array.isArray(proj.nodes) && proj.nodes.length > 0;
@@ -2424,26 +2424,15 @@ function registerBuiltins() {
         });
         return;
       }
-      // 2026-06-11 — operator forces LBS over the overlay-ancestor path,
-      // matching Init Rig's "Parent with Automatic Weights" semantic.
-      // Pre-fix Kora's 25 overlay-ancestor'd parts no-op'd because the
-      // skip predicate ("part already has a bone ancestor → overlay
-      // handles it") fired; but Kora is the case where overlay clearly
-      // wasn't deforming the mesh, which is why the user invoked the
-      // operator in the first place. force-LBS binds every unwired part
-      // to its ancestor bone (preferred) or nearest-by-pivot bone,
-      // adding the armature modifier on the next synthesizeModifierStacks
-      // sweep (re-run via Initialize Rig). Idempotent on already-bound
-      // parts.
       /** @type {{partsScanned: number, partsAssigned: number, byBone: Record<string, number>}} */
       let summary = { partsScanned: 0, partsAssigned: 0, byBone: {} };
       store.updateProject((draft) => {
-        summary = autoSkinAllParts(draft, { includeBoneAncestor: true });
+        summary = autoSkinAllParts(draft);
       });
       if (summary.partsAssigned === 0) {
         toast({
           title: 'Auto-Skin Unwired Bones',
-          description: `Nothing to skin — all ${summary.partsScanned} parts already have a binding.`,
+          description: `Nothing to skin — all ${summary.partsScanned} parts already have a binding or a bone ancestor.`,
         });
         return;
       }
@@ -2458,7 +2447,7 @@ function registerBuiltins() {
         .join(', ');
       toast({
         title: 'Auto-Skin Unwired Bones',
-        description: `Skinned ${summary.partsAssigned} of ${summary.partsScanned} parts — ${top}${byBoneEntries.length > 4 ? '…' : ''}. Click Initialize Rig to register the new ParamRotation_<bone> params + add the Armature modifier.`,
+        description: `Skinned ${summary.partsAssigned} of ${summary.partsScanned} parts — ${top}${byBoneEntries.length > 4 ? '…' : ''}. Click Initialize Rig to register the new ParamRotation_<bone> params.`,
       });
     },
   });
