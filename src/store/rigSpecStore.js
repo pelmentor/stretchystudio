@@ -12,7 +12,7 @@ import { gatherPhysicsRules } from '../io/live2d/rig/physicsConfig.js';
 import { selectRigSpec } from '../io/live2d/rig/selectRigSpec.js';
 import { sanitisePartName } from '../lib/partId.js';
 import { logger } from '../lib/logger.js';
-import { getMesh } from './objectDataAccess.js';
+import { isBoneGroup } from './objectDataAccess.js';
 
 /**
  * Attach the runtime physics rule list onto a rigSpec. Single source
@@ -175,41 +175,59 @@ function _isComplete(rigSpec, project) {
 }
 
 /**
- * Build the bone-mirror registry: every `ParamRotation_<sanitisedBoneName>`
- * whose corresponding bone has skinning data (jointBoneId on a mesh) maps
- * to its bone group's id. After this runs, `setParamValue` /
- * `setMany` fan out to `bone.pose.rotation`, and `syncFromProject` can
- * reconcile after direct bone mutations.
+ * Build the bone-mirror registry: every bone group whose name matches a
+ * `ParamRotation_<sanitisedBoneName>` param maps to that param.
  *
- * Skinning-based: any bone with a weighted part (jointBoneId + boneWeights)
- * and a matching `ParamRotation_<sanitisedName>` param is included. Per-bone
- * limb rotations (paramSpec.js section 5) qualify. RULE №4: once a group
- * rotation is migrated to a `groupRotation_<g>` BONE (groupRotationToBone.js)
- * its parts are skinned to it, so it AUTOMATICALLY joins the registry here —
- * `ParamRotation_<group>` then mirrors to the bone's `pose.rotation` with no
- * extra wiring. (Pre-RULE-№4 these were non-skeletal rotation deformers with
- * no bone counterpart and were excluded; the migration makes them bones.)
+ * Two-way wiring after this runs:
+ *   - PARAM → BONE: `setParamValue` / `setMany` fan out to `bone.pose.rotation`
+ *     (the existing slider/physics path).
+ *   - BONE → PARAM: CanvasViewport's pre-eval mirror reads
+ *     `bone.pose.rotation` and writes to `valuesForEval[paramId]` so the
+ *     Cubism warp evaluator deforms the mesh.
+ *
+ * # Pre-fix (2026-05-09 onward) — skinning-only gate
+ *
+ * The original heuristic required the bone to have an LBS-skinned part
+ * (some `mesh.jointBoneId === bone.id && mesh.boneWeights`). The intent
+ * was to scope the registry to bones that participate in Armature-modifier
+ * skinning, which is correct for fresh post-RULE-№4 rigs where
+ * `groupRotationToBone.js` auto-weights every migrated bone's children.
+ *
+ * # Why that broke for saved projects
+ *
+ * Older saves (and projects whose deformation flows through Cubism warps
+ * rather than LBS) carry bones with a matching `ParamRotation_<bone>`
+ * param but NO `jointBoneId / boneWeights` data on their child meshes.
+ * The skinning gate rejected them; the registry stayed empty; the
+ * BONE → PARAM mirror never fired; rotating those bones in pose mode
+ * (or keying them in animation) left the warp evaluator reading the
+ * default param value and the mesh stuck at rest pose.
+ *
+ * User report (Kora save, 2026-06-10): "I load Kora save and rotate her
+ * bones — the bones don't move anything."
+ *
+ * # Post-fix — semantic gate
+ *
+ * The registry now includes EVERY bone group whose name matches a
+ * `ParamRotation_<bone>` param. The matching param IS the wiring — the
+ * Cubism warp evaluator already consumes `ParamRotation_<bone>`, so
+ * mirroring the bone's pose into that param closes the bone-drives-mesh
+ * loop whether the deformation is per-vertex skinning OR warp-based.
+ *
+ * Bones WITHOUT a matching param stay excluded — there's no parameter
+ * for them to drive, so adding them to the registry would be a no-op
+ * at best and a silent rotation churn at worst.
  */
 function _buildBoneMirrorEntries(project) {
   const nodes = project?.nodes ?? [];
   const params = project?.parameters ?? [];
   const paramIds = new Set(params.map((p) => p?.id).filter(Boolean));
-  /** @type {Set<string>} */
-  const boneIdsWithSkinning = new Set();
-  for (const n of nodes) {
-    if (n?.type !== 'part') continue;
-    const m = getMesh(n, project);
-    if (m?.jointBoneId && m?.boneWeights) {
-      boneIdsWithSkinning.add(m.jointBoneId);
-    }
-  }
   const entries = [];
-  for (const boneId of boneIdsWithSkinning) {
-    const bone = nodes.find((n) => n.id === boneId);
-    if (!bone) continue;
+  for (const bone of nodes) {
+    if (!isBoneGroup(bone)) continue;
     const sanitised = sanitisePartName(bone.name || bone.id);
     const paramId = `ParamRotation_${sanitised}`;
-    if (paramIds.has(paramId)) entries.push({ paramId, boneId });
+    if (paramIds.has(paramId)) entries.push({ paramId, boneId: bone.id });
   }
   return entries;
 }
