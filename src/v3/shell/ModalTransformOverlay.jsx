@@ -345,11 +345,24 @@ export function ModalTransformOverlay() {
         if (useTyped) {
           dRot = typed * Math.PI / 180; // typed is degrees
         } else {
-          const ax0 = startMouse.x / zoom - pivotCanvas.x;
-          const ay0 = startMouse.y / zoom - pivotCanvas.y;
-          const ax1 = currentX / zoom - pivotCanvas.x;
-          const ay1 = currentY / zoom - pivotCanvas.y;
-          dRot = Math.atan2(ay1, ax1) - Math.atan2(ay0, ax0);
+          // 2026-06-10 fix — convert BOTH mouse positions to canvas
+          // coords before subtracting the canvas-space pivot. Pre-fix
+          // the code did `startMouse.x / zoom - pivotCanvas.x` which
+          // mixes viewport-px / zoom (still NOT canvas px — it's
+          // missing rect.left/zoom + panX/zoom) with canvas pivot →
+          // angle was computed around a phantom point shifted by
+          // (panX + rect.left)/zoom. With pan/zoom != defaults the
+          // rotation tracked the wrong arc. User report: "R for
+          // rotation works like garbage, unusuable not feeling
+          // blender at all." Use the canonical clientToCanvasXY
+          // helper so the rotation gesture stays anchored to the
+          // visible pivot regardless of pan/zoom state.
+          const rect = canvasRectRef.current ?? { left: 0, top: 0 };
+          const sx = (startMouse.x - rect.left) / zoom - view.panX / zoom - pivotCanvas.x;
+          const sy = (startMouse.y - rect.top)  / zoom - view.panY / zoom - pivotCanvas.y;
+          const cx2 = (currentX - rect.left) / zoom - view.panX / zoom - pivotCanvas.x;
+          const cy2 = (currentY - rect.top)  / zoom - view.panY / zoom - pivotCanvas.y;
+          dRot = Math.atan2(cy2, cx2) - Math.atan2(sy, sx);
           // Phase 2.D — rotation snap is auto-engaging when master
           // + increment.enabled. Shift = precision (Blender's 5°→1°
           // = `precision`). Without snap, Shift = MOD_PRECISION
@@ -368,13 +381,16 @@ export function ModalTransformOverlay() {
         if (useTyped) {
           scaleMag = typed;
         } else {
+          // Same pivot-frame fix as the rotate branch above —
+          // distances from the pivot need both terms in canvas coords.
+          const rect = canvasRectRef.current ?? { left: 0, top: 0 };
           const d0 = Math.hypot(
-            startMouse.x / zoom - pivotCanvas.x,
-            startMouse.y / zoom - pivotCanvas.y,
+            (startMouse.x - rect.left) / zoom - view.panX / zoom - pivotCanvas.x,
+            (startMouse.y - rect.top)  / zoom - view.panY / zoom - pivotCanvas.y,
           ) || 1;
           const d1 = Math.hypot(
-            currentX / zoom - pivotCanvas.x,
-            currentY / zoom - pivotCanvas.y,
+            (currentX - rect.left) / zoom - view.panX / zoom - pivotCanvas.x,
+            (currentY - rect.top)  / zoom - view.panY / zoom - pivotCanvas.y,
           );
           scaleMag = d1 / d0;
           if (!Number.isFinite(scaleMag) || scaleMag <= 0) scaleMag = 1;
