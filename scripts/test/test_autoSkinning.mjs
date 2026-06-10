@@ -257,5 +257,122 @@ function makeProject({ bones, parts }) {
   eq(r.byBone.head,     1, '§4 — byBone histogram per-bone (head)');
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Section 5 — {includeBoneAncestor: true} (force-LBS for Init Rig)
+// ─────────────────────────────────────────────────────────────────────
+
+// 5a — force-LBS binds part that DOES have a bone ancestor (the case the
+// default mode skips, where the user's "bones don't move character"
+// failure on a fresh PSD wizard originated).
+{
+  const project = makeProject({
+    bones: [
+      { id: 'rightArm', name: 'rightArm', role: 'rightArm', px:  100, py: 0 },
+      { id: 'leftArm',  name: 'leftArm',  role: 'leftArm',  px: -100, py: 0 },
+    ],
+    parts: [
+      // Part is parented to leftArm bone — default mode skips, but
+      // force-LBS should bind. Prefers the ancestor bone (leftArm) over
+      // the spatially-nearer rightArm so the part follows the bone the
+      // user structurally assigned it to in the wizard.
+      {
+        id: 'shirt',
+        parent: 'leftArm',
+        mesh: { vertices: [{ x: 90, y: 0 }] },  // closer to rightArm spatially
+      },
+    ],
+  });
+  const result = assignRigidSkinningToPart(
+    project.nodes.find((n) => n.id === 'shirt'),
+    project,
+    null,
+    { includeBoneAncestor: true },
+  );
+  ok(result === true, '§5a — force-LBS assigns even when bone ancestor present');
+  const mesh = project.nodes.find((n) => n.id === 'shirt').mesh;
+  eq(mesh.jointBoneId, 'leftArm',
+    '§5a — prefers the ancestor bone (leftArm) over nearer-by-pivot (rightArm)');
+  eq(mesh.boneWeights, [1],
+    '§5a — rigid [1] weights');
+}
+
+// 5b — force-LBS still skips parts with existing weights (idempotent).
+{
+  const project = makeProject({
+    bones: [{ id: 'bone1', role: 'head', px: 0, py: 0 }],
+    parts: [{
+      id: 'preBound',
+      parent: 'bone1',
+      mesh: {
+        vertices: [{ x: 0, y: 0 }],
+        boneWeights: [0.7],
+        jointBoneId: 'differentBone',
+      },
+    }],
+  });
+  const result = assignRigidSkinningToPart(
+    project.nodes.find((n) => n.id === 'preBound'),
+    project,
+    null,
+    { includeBoneAncestor: true },
+  );
+  ok(result === false,
+    '§5b — force-LBS still respects existing weights (idempotent)');
+  const mesh = project.nodes.find((n) => n.id === 'preBound').mesh;
+  eq(mesh.jointBoneId, 'differentBone',
+    '§5b — original binding preserved');
+}
+
+// 5c — force-LBS no-bone-ancestor case falls back to nearest-by-pivot
+// (matches default behaviour when bone ancestor is absent).
+{
+  const project = makeProject({
+    bones: [
+      { id: 'rightArm', name: 'rightArm', role: 'rightArm', px:  100, py: 0 },
+      { id: 'leftArm',  name: 'leftArm',  role: 'leftArm',  px: -100, py: 0 },
+    ],
+    parts: [
+      { id: 'orphan', parent: null, mesh: { vertices: [{ x: 90, y: 0 }] } },
+    ],
+  });
+  const result = assignRigidSkinningToPart(
+    project.nodes.find((n) => n.id === 'orphan'),
+    project,
+    null,
+    { includeBoneAncestor: true },
+  );
+  ok(result === true, '§5c — force-LBS assigns to no-ancestor parts');
+  const mesh = project.nodes.find((n) => n.id === 'orphan').mesh;
+  eq(mesh.jointBoneId, 'rightArm',
+    '§5c — falls back to nearest-by-pivot when no ancestor');
+}
+
+// 5d — autoSkinAllParts forwards options correctly.
+{
+  const project = makeProject({
+    bones: [
+      { id: 'arm', name: 'arm', role: 'leftArm', px: 0, py: 0 },
+    ],
+    parts: [
+      { id: 'p1', parent: 'arm', mesh: { vertices: [{ x: 10, y: 0 }] } },
+      { id: 'p2', parent: null,  mesh: { vertices: [{ x: 20, y: 0 }] } },
+    ],
+  });
+  // Default mode: p1 skipped (has bone ancestor), p2 assigned.
+  const r1 = autoSkinAllParts(project);
+  eq(r1.partsAssigned, 1, '§5d — default mode: only the non-ancestor part assigned');
+
+  // Reset + force-LBS: both parts assigned.
+  for (const n of project.nodes) {
+    if (n?.type === 'part' && n.mesh) {
+      delete n.mesh.boneWeights;
+      delete n.mesh.jointBoneId;
+    }
+  }
+  const r2 = autoSkinAllParts(project, { includeBoneAncestor: true });
+  eq(r2.partsAssigned, 2, '§5d — force-LBS: both parts assigned');
+  eq(r2.byBone.arm, 2, '§5d — both bound to the single bone');
+}
+
 console.log(`autoSkinning: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

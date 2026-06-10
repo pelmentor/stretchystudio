@@ -105,15 +105,19 @@ function nearestBoneByPivot(centroid, bones) {
 }
 
 /**
- * Assign rigid LBS weights to a part if (and only if) it has no
- * existing skinning binding AND no bone-group ancestor in its parent
- * chain.
+ * Assign rigid LBS weights to a part if it has no existing skinning
+ * binding. By default skips parts with a bone-group ancestor in their
+ * parent chain (overlay path covers them). Pass
+ * `{includeBoneAncestor: true}` to force-LBS those parts too — that's
+ * the Blender "Parent with Automatic Weights" mode the Init Rig
+ * operator uses to guarantee every meshed part has a usable bone
+ * binding even when overlay would have sufficed.
  *
  * Caller is inside an immer recipe; this mutates the draft mesh in
  * place. Returns `true` when a binding was newly written, `false`
  * when the part was skipped (existing weights, existing
- * `jointBoneId`, bone ancestor present, missing mesh, or no bones in
- * the project).
+ * `jointBoneId`, bone ancestor present + not forced, missing mesh,
+ * or no bones in the project).
  *
  * @param {object} part - part node (`type === 'part'`)
  * @param {object} project - project draft
@@ -121,9 +125,15 @@ function nearestBoneByPivot(centroid, bones) {
  *   Optional precomputed lookups. When iterating many parts (the
  *   migration / wizard mass-call path), pass shared cache objects
  *   to avoid quadratic rebuild cost on the bone list / id index.
+ * @param {{ includeBoneAncestor?: boolean }} [options]
+ *   `includeBoneAncestor: true` drops the bone-ancestor skip predicate
+ *   so parts already parented to a bone group ALSO get LBS weights
+ *   (matches Blender's "Parent with Automatic Weights"). Default
+ *   `false` preserves the legacy "overlay handles bone-ancestor
+ *   parts" behaviour.
  * @returns {boolean}
  */
-export function assignRigidSkinningToPart(part, project, cache) {
+export function assignRigidSkinningToPart(part, project, cache, options) {
   if (!part || part.type !== 'part') return false;
   if (!project) return false;
   const mesh = getMesh(part, project);
@@ -147,13 +157,28 @@ export function assignRigidSkinningToPart(part, project, cache) {
   }
   if (bones.length === 0) return false;
 
-  const ancestor = nearestBoneAncestorId(part, byId, isBoneGroup);
-  if (ancestor) return false;
+  const includeBoneAncestor = options?.includeBoneAncestor === true;
+  if (!includeBoneAncestor) {
+    const ancestor = nearestBoneAncestorId(part, byId, isBoneGroup);
+    if (ancestor) return false;
+  }
 
   const centroid = computeMeshCentroid(mesh.vertices);
   if (!centroid) return false;
 
-  const winner = nearestBoneByPivot(centroid, bones);
+  // When forcing LBS over an existing bone-ancestor chain, prefer the
+  // ancestor bone as the binding target — it's the bone the user
+  // structurally expects this part to follow (e.g. shirt under leftArm
+  // → bind to leftArm, not to a nearer torso bone). Falls back to
+  // nearest-by-pivot when no ancestor exists.
+  let winner = null;
+  if (includeBoneAncestor) {
+    const ancestorId = nearestBoneAncestorId(part, byId, isBoneGroup);
+    if (typeof ancestorId === 'string' && ancestorId.length > 0) {
+      winner = byId.get(ancestorId) ?? null;
+    }
+  }
+  if (!winner) winner = nearestBoneByPivot(centroid, bones);
   if (!winner?.id) return false;
 
   mesh.boneWeights = new Array(mesh.vertices.length).fill(1);
@@ -165,13 +190,27 @@ export function assignRigidSkinningToPart(part, project, cache) {
  * Walk every meshed part in the project and apply
  * `assignRigidSkinningToPart`. Returns a summary count.
  *
- * Used by the v52 migration (retro-skin existing saves like Kora) and
- * available to a future "Auto-skin all parts" operator.
+ * Used by:
+ *   - the v52 migration (retro-skin existing saves) — default options.
+ *   - the `rig.autoSkinUnwiredBones` operator (F3 palette) — default
+ *     options.
+ *   - `RigService.initializeRig` — passes `{includeBoneAncestor: true}`
+ *     so EVERY meshed part gets an LBS binding, matching Blender's
+ *     "Parent with Automatic Weights" semantics. Without this, parts
+ *     under bone-role groups stay weightless and the only path that
+ *     moves them on bone rotation is the overlay matrix — which
+ *     requires `bone.pose.rotation` (skeleton-gesture writes), NOT
+ *     the `ParamRotation_<bone>` slider that the Parameters panel
+ *     surfaces. Forcing LBS on Init Rig makes every bone slider
+ *     deform every part it owns, end-to-end.
  *
  * @param {object} project - project draft
+ * @param {{ includeBoneAncestor?: boolean }} [options]
+ *   Forwarded to `assignRigidSkinningToPart`. See its docstring for
+ *   the semantic.
  * @returns {{ partsScanned: number, partsAssigned: number, byBone: Record<string, number> }}
  */
-export function autoSkinAllParts(project) {
+export function autoSkinAllParts(project, options) {
   /** @type {Record<string, number>} */
   const byBone = {};
   let partsScanned = 0;
@@ -190,7 +229,7 @@ export function autoSkinAllParts(project) {
   for (const n of project.nodes) {
     if (n?.type !== 'part') continue;
     partsScanned++;
-    const ok = assignRigidSkinningToPart(n, project, cache);
+    const ok = assignRigidSkinningToPart(n, project, cache, options);
     if (!ok) continue;
     partsAssigned++;
     const mesh = getMesh(n, project);
@@ -201,9 +240,10 @@ export function autoSkinAllParts(project) {
   }
 
   if (partsAssigned > 0) {
+    const tag = options?.includeBoneAncestor ? 'forced-LBS' : 'unwired-only';
     logger.info('autoSkin',
-      `autoSkinAllParts: ${partsAssigned}/${partsScanned} parts newly weighted`,
-      { partsScanned, partsAssigned, byBone });
+      `autoSkinAllParts (${tag}): ${partsAssigned}/${partsScanned} parts newly weighted`,
+      { partsScanned, partsAssigned, byBone, includeBoneAncestor: !!options?.includeBoneAncestor });
   }
   return { partsScanned, partsAssigned, byBone };
 }

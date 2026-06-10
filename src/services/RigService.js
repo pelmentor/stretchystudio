@@ -32,6 +32,7 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
 import { runRigInitIdentityDiag } from '../io/live2d/rig/rigInitIdentityDiag.js';
 import { resolveAutoRigConfig } from '../io/live2d/rig/autoRigConfig.js';
+import { autoSkinAllParts } from '../io/live2d/rig/autoSkinning.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
 import { beginBatch, endBatch } from '../store/undoHistory.js';
 import { logger } from '../lib/logger.js';
@@ -276,6 +277,57 @@ export async function initializeRig() {
     // transforms (non-bone) are intentionally preserved — those are
     // user layout, not pose. See `services/PoseService.js`.
     resetToRestPose();
+
+    // 2026-06-11 — Blender-faithful "Parent with Automatic Weights"
+    // step. Init Rig is structurally the SS analog of Blender's
+    // `Object Mode → Object → Parent → Armature Deform with Automatic
+    // Weights`: after it runs, every meshed part MUST have an LBS
+    // binding (jointBoneId + boneWeights) so bone rotation deforms the
+    // mesh end-to-end via:
+    //   1. paramSpec creates `ParamRotation_<bone>` per weighted bone
+    //      (paramSpec.js:285 loops over weighted meshes only).
+    //   2. rigSpecStore._buildBoneMirrorEntries registers the bone in
+    //      the BONE → PARAM mirror (name-match against
+    //      `ParamRotation_<bone>`).
+    //   3. synthesizeModifierStacks appends an Armature modifier so
+    //      pickBonePostChainComposition returns 'lbs' and
+    //      applyBonePostChainSkin applies the bone WORLD matrix per
+    //      vertex.
+    //
+    // Pre-2026-06-11 the wizard's mesh-callback ran
+    // assignRigidSkinningToPart with the bone-ancestor skip predicate
+    // ON, so any part the user assigned to a bone-role group via the
+    // wizard stayed unweighted (the skip predicate defended against
+    // v32's rigid-1.0 strip on those same parts). With no weights,
+    // bone gestures only deformed the mesh via the overlay path,
+    // which requires `bone.pose.rotation` writes (skeleton gesture)
+    // and ignores the `ParamRotation_<bone>` slider. End result: user
+    // imports PSD, finishes wizard, hits Init Rig, drags the Rotation
+    // <bone> slider in the Parameters panel, mesh stays at rest. They
+    // reported: "the fucking bones don't move the character".
+    //
+    // `{includeBoneAncestor: true}` drops that skip predicate so EVERY
+    // meshed part gets bound to a bone — preferring the nearest
+    // ancestor bone when one exists (semantically: "stay under the
+    // bone the user put you under"), falling back to nearest-by-pivot
+    // otherwise. Mirrors what Blender does when "Parent with
+    // Automatic Weights" sees a part the user dropped onto a bone:
+    // weight to that bone, not to a nearer one.
+    //
+    // Idempotency: parts that already carry `jointBoneId` or
+    // `boneWeights` from the wizard's limb path (computeSkinWeights)
+    // OR from a prior Init Rig run are SKIPPED — assignRigidSkinningToPart
+    // returns false at the early-exit guards. So re-running Init Rig
+    // doesn't clobber user-authored weights.
+    useProjectStore.getState().updateProject((draft) => {
+      const summary = autoSkinAllParts(draft, { includeBoneAncestor: true });
+      if (summary.partsAssigned > 0) {
+        logger.info('rigInit',
+          `Init Rig auto-skin (forced-LBS): ${summary.partsAssigned}/${summary.partsScanned} parts newly weighted, ${Object.keys(summary.byBone).length} bones populated`,
+          summary);
+      }
+    });
+
     const project = useProjectStore.getState().project;
     // Load textures so eye-source meshes get real PNG bytes for the
     // closure parabola fit. Failure here is non-fatal — rig init still
