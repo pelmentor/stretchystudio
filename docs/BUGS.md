@@ -12,6 +12,18 @@ Each entry is short and self-contained — anyone reading should be able to pick
 - **When triaging** — fill in any missing **Repro** steps the moment you learn them. Empty Repro = guesswork.
 - **Header marker** — `✅` prefix means fix shipped (visual scrub may still be pending — see entry body).
 
+## Status snapshot (2026-06-10)
+
+Recent session batch (2026-06-09 → 2026-06-10) — full provenance in commit log + memory under `project_session_2026_06_09_*_shipped.md`:
+
+- **Animation editing.** Timeline keyframe drag root-cause refactor (ghost-render + `applyTimeTranslate` commit); V2D plain-wheel zoom; default range 1→240; range band overlay; snap-to-extremes. Per-row `I`-key keyframe insert with Blender shape-key visual on param sliders + `only_if_keyed` slider responsiveness.
+- **B-key bleed-through.** Pressing B over the Timeline / Dopesheet / FCurve / Parameters used to open the viewport box-select modal and select parts hidden behind those panels. New `hoveredEditorType()` helper + `data-editor-type` annotations on each editor's root gate the operator to viewport hover.
+- **Export pipeline.** PNG sequence export wired to depgraph eval (was rest-pose on every frame for param-driven motions); `PART_NO_TEXTURE` + `PART_UV_LENGTH` validation warnings de-noised (false positives from PSD-imported fallback + flat-vs-object array shape mismatch); validation panel groups by code. Spine JSON exporter mesh shape fixed (flat vertices/uvs/triangles + Y-mirror) — structural fix; coordinate space awaits in-runtime verification.
+- **Variants.** Eye-set crossfade fix end-to-end (SS viewport `pairedVariantSuffixes` + depgraph multiplier + moc3 2D-compound branch).
+- **Motion presets.** look-{left,right,up,down,*-{left,right}} + tilt-{left,right} family + `look-set` CLI alias.
+
+BUG-015 (BodyAngle slider) and BUG-023 (save→load live preview) remain instrumented-and-waiting for fresh repro data. Everything else under "Open" below has either shipped (see ✅ markers) or is the same waiting-for-repro state as the previous snapshot.
+
 ## Status snapshot (2026-05-08)
 
 | Status | Entries |
