@@ -31,6 +31,7 @@ import { useParamValuesStore } from '../store/paramValuesStore.js';
 // initializeRig / runStage / refitAll.
 import { runRigInvariantChecks } from '../io/live2d/rig/rigInvariantCheck.js';
 import { runRigInitIdentityDiag } from '../io/live2d/rig/rigInitIdentityDiag.js';
+import { runBoneChainDiagnostic } from '../io/live2d/rig/boneChainDiagnostic.js';
 import { resolveAutoRigConfig } from '../io/live2d/rig/autoRigConfig.js';
 import { resetToRestPose, capturePose, restorePose } from './PoseService.js';
 import { beginBatch, endBatch } from '../store/undoHistory.js';
@@ -333,6 +334,30 @@ export async function initializeRig() {
         useProjectStore.getState().versionControl?.geometryVersion ?? 0,
       error: null,
     });
+
+    // 2026-06-11 — bone-to-mesh chain end-to-end diagnostic.
+    // [[param-bone-mirror-overwrites-gesture]] is the most recent
+    // four-attempt iteration on "bones don't move the mesh." The user
+    // explicitly asked to STOP guessing; this diagnostic fires once
+    // per Init Rig and dumps every layer of the chain (LBS/overlay
+    // part counts per bone, `ParamRotation_<bone>` param presence,
+    // bone-mirror registry entry presence, armature modifier count
+    // per LBS-bound bone) so a single log paste tells us conclusively
+    // which layer broke. Per [[invariant-checks-over-user-repro]]:
+    // when "viewport looks wrong," build the structural check that
+    // fires from logs, don't ping-pong with the user reading state.
+    //
+    // Mirror state is read from `paramValuesStore.boneMirror` AFTER
+    // the rigSpecStore subscriber rebuilds it. Reading it directly
+    // here (post-setState above) catches the state that the live
+    // viewport eval will see on the next tick.
+    try {
+      const postSeedProjectForChainDiag = useProjectStore.getState().project;
+      const boneMirror = useParamValuesStore.getState().boneMirror ?? null;
+      runBoneChainDiagnostic(postSeedProjectForChainDiag, boneMirror);
+    } catch (err) {
+      logger.warn('boneChainDiag', `bone-chain diagnostic threw: ${String(err)}`, { err: String(err) });
+    }
 
     // Seed live param values from the freshly baked param spec —
     // sliders start at canonical defaults rather than stale dial
