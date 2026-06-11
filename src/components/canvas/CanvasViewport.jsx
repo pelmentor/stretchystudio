@@ -840,82 +840,107 @@ export default function CanvasViewport({
         }
       }
 
-      if (livePreview) {
+      // Driver execution gate.
+      //   - `livePreview`: full Live Preview surface — breath / eye blink
+      //     / cursor look / physics all fire (the "Cubism Viewer parity"
+      //     mode).
+      //   - viewport + autoKey + has physics rules: physics ONLY (user
+      //     is authoring; the simulation contributes so hair / clothing /
+      //     other physics-driven channels react to their pose edits, and
+      //     `record` mode captures those outputs into fcurves per frame).
+      //     Breath / blink / look stay off because they're auto-cycling
+      //     "performance" drivers, not authoring inputs — keyframing
+      //     them while the user poses would smear ParamBreath across
+      //     every frame they touch (user 2026-06-11: "physics should
+      //     work too and get keyframed too! Right now it's turned off").
+      const _autoKeyOn = !!editorRef.current?.autoKeyframe;
+      const _hasPhysicsRules = Array.isArray(physicsRules) && physicsRules.length > 0;
+      const _viewportAutoKeyPhysics = !livePreview && _autoKeyOn && _hasPhysicsRules;
+      const shouldRunDrivers = livePreview || _viewportAutoKeyPhysics;
+      if (shouldRunDrivers) {
         const updates = {};
 
-        // Breath — auto-cycle ParamBreath. Period matches Cubism Web
-        // Framework's `CubismBreath` standard wiring for ParamBreath
-        // (cycle=3.2345s, offset=0.5, peak=0.5) so our live preview
-        // stays phase-synced with Cubism Viewer running the same model.
-        // Phase advances by dt; offset 0.5, amplitude 0.5 so the curve
-        // sits in [0,1]. Free-runs across mounts so toggling Live
-        // Preview off/on doesn't snap the breath back to phase 0.
-        if (lastPhysicsTimestampRef.current !== 0) {
-          const dtBreath = Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000));
-          breathPhaseRef.current += dtBreath * (2 * Math.PI / 3.2345);
-        }
-        const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
-        updates.ParamBreath = breathV;
-
-        // Eye blink — Cubism Web Framework's `CubismEyeBlink`. Drives
-        // `ParamEyeLOpen` / `ParamEyeROpen` (or whatever the project's
-        // `groups.EyeBlink` table names) on a periodic state machine.
-        // `dtBlink` shares the same physics-clock derivation so the
-        // first frame is dt=0 (no jump on entry to Live Preview).
-        const dtBlink = lastPhysicsTimestampRef.current !== 0
-          ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
-          : 0;
-        const blinkValue = eyeBlinkRef.current.tick(dtBlink);
-        const blinkParamIds = resolveEyeBlinkParamIds(projectRef.current);
-        for (const paramId of blinkParamIds) {
-          updates[paramId] = blinkValue;
-        }
-
-        // Cursor look — Cubism-style damped follow. CubismTargetPoint:
-        // target = normalized cursor while LMB is held, target = (0,0)
-        // on release. Damped value chases target each frame; on
-        // release the head/iris/body smoothly return to rest pose.
-        // Half-life ≈ 100ms with a per-frame damping factor that's
-        // dt-aware so behaviour is frame-rate independent.
-        //
-        //   ParamAngleX/Y/Z  ±30°  (head turn / tilt / roll)
-        //   ParamEyeBallX/Y  ±1    (iris follows the same target)
-        //   ParamBodyAngleX/Y/Z  ±10°  (body leans 1/3 of head)
-        //
-        // Without damping the character froze at the last cursor
-        // position when the user released LMB; user 2026-05-02
-        // wanted Cubism Viewer parity ("matches cubism behaviour
-        // PERFECTLY") which means smooth return to neutral.
-        let targetX = 0;
-        let targetY = 0;
-        if (lookRef.current.active && canvasRef.current) {
-          const rect = canvasRef.current.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            const nx = ((lookRef.current.clientX - rect.left) / rect.width) * 2 - 1;
-            const ny = ((lookRef.current.clientY - rect.top) / rect.height) * 2 - 1;
-            targetX = Math.max(-1, Math.min(1, nx));
-            targetY = Math.max(-1, Math.min(1, ny));
+        // Performance drivers — breath / eye blink / cursor look. These
+        // are auto-cycling Cubism Viewer-parity drivers; they only make
+        // sense on the Live Preview surface. In viewport-autoKey mode
+        // (user actively authoring) they must STAY OFF so the user's
+        // ParamBreath / ParamAngleX / etc. aren't smeared across every
+        // frame they touch with a sine-wave cursor-following value.
+        if (livePreview) {
+          // Breath — auto-cycle ParamBreath. Period matches Cubism Web
+          // Framework's `CubismBreath` standard wiring for ParamBreath
+          // (cycle=3.2345s, offset=0.5, peak=0.5) so our live preview
+          // stays phase-synced with Cubism Viewer running the same model.
+          // Phase advances by dt; offset 0.5, amplitude 0.5 so the curve
+          // sits in [0,1]. Free-runs across mounts so toggling Live
+          // Preview off/on doesn't snap the breath back to phase 0.
+          if (lastPhysicsTimestampRef.current !== 0) {
+            const dtBreath = Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000));
+            breathPhaseRef.current += dtBreath * (2 * Math.PI / 3.2345);
           }
+          const breathV = 0.5 + 0.5 * Math.sin(breathPhaseRef.current);
+          updates.ParamBreath = breathV;
+
+          // Eye blink — Cubism Web Framework's `CubismEyeBlink`. Drives
+          // `ParamEyeLOpen` / `ParamEyeROpen` (or whatever the project's
+          // `groups.EyeBlink` table names) on a periodic state machine.
+          // `dtBlink` shares the same physics-clock derivation so the
+          // first frame is dt=0 (no jump on entry to Live Preview).
+          const dtBlink = lastPhysicsTimestampRef.current !== 0
+            ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
+            : 0;
+          const blinkValue = eyeBlinkRef.current.tick(dtBlink);
+          const blinkParamIds = resolveEyeBlinkParamIds(projectRef.current);
+          for (const paramId of blinkParamIds) {
+            updates[paramId] = blinkValue;
+          }
+
+          // Cursor look — Cubism-style damped follow. CubismTargetPoint:
+          // target = normalized cursor while LMB is held, target = (0,0)
+          // on release. Damped value chases target each frame; on
+          // release the head/iris/body smoothly return to rest pose.
+          // Half-life ≈ 100ms with a per-frame damping factor that's
+          // dt-aware so behaviour is frame-rate independent.
+          //
+          //   ParamAngleX/Y/Z  ±30°  (head turn / tilt / roll)
+          //   ParamEyeBallX/Y  ±1    (iris follows the same target)
+          //   ParamBodyAngleX/Y/Z  ±10°  (body leans 1/3 of head)
+          //
+          // Without damping the character froze at the last cursor
+          // position when the user released LMB; user 2026-05-02
+          // wanted Cubism Viewer parity ("matches cubism behaviour
+          // PERFECTLY") which means smooth return to neutral.
+          let targetX = 0;
+          let targetY = 0;
+          if (lookRef.current.active && canvasRef.current) {
+            const rect = canvasRef.current.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              const nx = ((lookRef.current.clientX - rect.left) / rect.width) * 2 - 1;
+              const ny = ((lookRef.current.clientY - rect.top) / rect.height) * 2 - 1;
+              targetX = Math.max(-1, Math.min(1, nx));
+              targetY = Math.max(-1, Math.min(1, ny));
+            }
+          }
+          // Per-frame damping. half-life = 0.1s → α = 1 - 0.5^(dt/half).
+          // dt comes from the same lastPhysicsTimestampRef the breath
+          // cycle uses; on the very first frame dt is 0 (no movement).
+          const _dtLook = lastPhysicsTimestampRef.current !== 0
+            ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
+            : 0;
+          const _alpha = 1 - Math.pow(0.5, _dtLook / 0.1);
+          lookDampRef.current.x += (targetX - lookDampRef.current.x) * _alpha;
+          lookDampRef.current.y += (targetY - lookDampRef.current.y) * _alpha;
+          const cx = lookDampRef.current.x;
+          const cy = lookDampRef.current.y;
+          updates.ParamAngleX = cx * 30;
+          updates.ParamAngleY = -cy * 30; // cursor up → look up
+          updates.ParamAngleZ = cx * 30;
+          updates.ParamEyeBallX = cx;
+          updates.ParamEyeBallY = -cy; // cursor up → iris up
+          updates.ParamBodyAngleX = cx * 10;
+          updates.ParamBodyAngleY = -cy * 10;
+          updates.ParamBodyAngleZ = cx * 10;
         }
-        // Per-frame damping. half-life = 0.1s → α = 1 - 0.5^(dt/half).
-        // dt comes from the same lastPhysicsTimestampRef the breath
-        // cycle uses; on the very first frame dt is 0 (no movement).
-        const _dtLook = lastPhysicsTimestampRef.current !== 0
-          ? Math.min(0.5, Math.max(0, (timestamp - lastPhysicsTimestampRef.current) / 1000))
-          : 0;
-        const _alpha = 1 - Math.pow(0.5, _dtLook / 0.1);
-        lookDampRef.current.x += (targetX - lookDampRef.current.x) * _alpha;
-        lookDampRef.current.y += (targetY - lookDampRef.current.y) * _alpha;
-        const cx = lookDampRef.current.x;
-        const cy = lookDampRef.current.y;
-        updates.ParamAngleX = cx * 30;
-        updates.ParamAngleY = -cy * 30; // cursor up → look up
-        updates.ParamAngleZ = cx * 30;
-        updates.ParamEyeBallX = cx;
-        updates.ParamEyeBallY = -cy; // cursor up → iris up
-        updates.ParamBodyAngleX = cx * 10;
-        updates.ParamBodyAngleY = -cy * 10;
-        updates.ParamBodyAngleZ = cx * 10;
 
         // Physics — rebuild state on rigSpec identity change, then
         // integrate one tick and queue outputs that actually moved.
@@ -1104,8 +1129,10 @@ export default function CanvasViewport({
         // identity, so idle frames hit the cache and skip evalRig.
         valuesForEval = paramValuesRef.current;
       } else {
-        // Edit mode — reset physics state + clock so a future toggle
-        // back to live preview starts clean (no accumulated dt jump).
+        // Drivers OFF — neither Live Preview nor viewport-autoKey-physics.
+        // Reset physics state + clock so a future enable (toggle Live
+        // Preview on, OR toggle autoKey on with physics rules present)
+        // starts clean (no accumulated dt jump from the gap).
         physicsRigSpecRef.current = null;
         physicsStateRef.current = null;
         lastPhysicsTimestampRef.current = 0;
