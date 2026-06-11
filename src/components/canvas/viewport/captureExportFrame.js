@@ -249,7 +249,21 @@ export function captureExportFrame(ctx, opts) {
       const node = exportProject.nodes.find((n) => n.id === frame.id);
       const m = getMesh(node, exportProject);
       if (!m) continue;
-      scene.parts.uploadPositions(frame.id, frame.vertexPositions, new Float32Array(m.uvs));
+      // `frame.vertexPositions` is a flat `Float32Array([x0,y0,x1,y1,…])`
+      // from the depgraph. `uploadPositions` reads `vertices[i].x` /
+      // `vertices[i].y`, so it needs the object-vert shape
+      // `[{x,y},{x,y},…]`. Mirrors the live tick at
+      // `CanvasViewport.jsx:1511-1516` — without this conversion every
+      // GPU vertex becomes NaN, deformation drops out, and PNG sequence
+      // export collapses to the rest pose for every frame regardless
+      // of `timeMs` (user report 2026-06-11: "all frames identical
+      // to first frame").
+      const len = frame.vertexPositions.length >> 1;
+      const verts = new Array(len);
+      for (let i = 0; i < len; i++) {
+        verts[i] = { x: frame.vertexPositions[i * 2], y: frame.vertexPositions[i * 2 + 1] };
+      }
+      scene.parts.uploadPositions(frame.id, verts, new Float32Array(m.uvs));
       exportMeshOverridden.push(frame.id);
     }
   }
