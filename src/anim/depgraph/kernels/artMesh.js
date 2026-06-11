@@ -86,18 +86,28 @@ export function kernelArtMeshEval(op, ctx) {
   const idNode = op.owner?.owner;
   if (!idNode) return null;
   const partId = idNode.idRef;
-  // Use the per-eval part-by-id cache (also used by the bone post-chain
+  // Use the per-eval node-by-id cache (also used by the bone post-chain
   // pass below). Without this, every ART_MESH_EVAL kernel did a linear
   // `nodes.find` — O(parts × nodes) per frame ≈ 20k comparisons on a
   // 100-part rig with 200 total nodes.
+  //
+  // CRITICAL: include EVERY node type (parts + groups + bones), not
+  // parts-only. The second cache-init site below (~line 350) hands this
+  // same map to `applyBonePostChainSkin` → `resolveBoneWorldFromCtx`,
+  // which walks the bone parent chain via `byId.get(boneId)`. A
+  // parts-only map returns `undefined` for every bone → bone WORLD
+  // collapses to identity → no rotation reaches the mesh. This was the
+  // root cause of "Init Rig → bones don't move the arm" (test
+  // `test_groupRotationBoneEval` baseline failure — LBS@30° produced
+  // rest verts).
   if (!ctx._artMeshByIdCache) {
     ctx._artMeshByIdCache = new Map();
     for (const n of ctx.project?.nodes ?? []) {
-      if (n && n.type === 'part' && n.id) ctx._artMeshByIdCache.set(n.id, n);
+      if (n?.id) ctx._artMeshByIdCache.set(n.id, n);
     }
   }
   const part = ctx._artMeshByIdCache.get(partId);
-  if (!part) return null;
+  if (!part || part.type !== 'part') return null;
 
   // v18 (Object/ObjectData split) routes geometry through `node.dataId`
   // → sibling `meshData` node; `part.mesh` is undefined after the split.

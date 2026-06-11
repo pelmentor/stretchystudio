@@ -34,6 +34,20 @@ import { applyOverlayMatrixFlat } from '../../../renderer/boneOverlayMatrix.js';
 import { pickBonePostChainComposition } from '../../../renderer/bonePostChainComposition.js';
 import { finiteOr } from '../../../lib/finiteOr.js';
 import { OperationCode, NodeType } from '../types.js';
+import { logger } from '../../../lib/logger.js';
+
+// Eval-time bone-skin instrumentation — fires when applyBonePostChainSkin
+// runs with a non-identity bone WORLD matrix. Throttled at module level
+// to once per ~500ms across ALL parts so a sustained gesture produces
+// a steady stream of legible log lines, not a 60Hz flood. Bypasses RULE
+// №1 "no diagnostic-only paths" exception per [[invariant-checks-over-user-repro]]:
+// fire-when-thing-changes invariants narrow root-cause without forcing
+// the user to click parts.
+const SKIN_DIAG_THROTTLE_MS = 500;
+let _lastSkinDiagAt = 0;
+function _now() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 /**
  * Walk the project to find the part's nearest bone-group ancestor.
@@ -201,9 +215,37 @@ export function applyBonePostChainSkin(part, partMesh, positions, ctx, byId, bon
       : null;
     const weights = partMesh?.boneWeights ?? part?.mesh?.boneWeights ?? null;
     if (!weights) return positions;
+    // boneSkinDiag — fires when EITHER bone WORLD is non-identity. Logs
+    // the actual matrices the kernel sees so a "bones don't deform mesh"
+    // report has a single line confirming what eval produces. Throttled
+    // module-wide; first eval call within the window wins. Capture vert
+    // sample BEFORE applyTwoBoneSkinning so we can show before+after.
+    const _childIdent = isIdentityMatrix(childMatrix);
+    const _parentIdent = !parentMatrix || isIdentityMatrix(parentMatrix);
+    /** @type {Parameters<typeof _emitSkinDiag>[0] | null} */
+    let _diagSnapshot = null;
+    if (!_childIdent || !_parentIdent) {
+      const t = _now();
+      if (t - _lastSkinDiagAt >= SKIN_DIAG_THROTTLE_MS) {
+        _lastSkinDiagAt = t;
+        _diagSnapshot = {
+          part,
+          partMesh,
+          kind: /** @type {'lbs'} */ ('lbs'),
+          childMatrix: Array.from(childMatrix),
+          parentMatrix: parentMatrix ? Array.from(parentMatrix) : null,
+          jointBoneId: decision.jointBoneId,
+          parentBoneId,
+          beforeXY: [positions[0], positions[1]],
+          weight0: weights[0] ?? null,
+          byId,
+        };
+      }
+    }
     // Weight=1 fast path subsumed by applyTwoBoneSkinning's per-vertex
     // dispatch; no need to special-case here.
     applyTwoBoneSkinning(positions, parentMatrix, childMatrix, weights);
+    if (_diagSnapshot) _emitSkinDiag(_diagSnapshot, [positions[0], positions[1]]);
     return positions;
   }
 
@@ -213,8 +255,79 @@ export function applyBonePostChainSkin(part, partMesh, positions, ctx, byId, bon
   if (!ancestorId) return positions;
   const m = resolveBoneWorldFromCtx(ancestorId, ctx, byId, boneWorldCache);
   if (isIdentityMatrix(m)) return positions;
+  // boneSkinDiag (overlay path) — fires when ancestor WORLD is non-identity.
+  /** @type {Parameters<typeof _emitSkinDiag>[0] | null} */
+  let _overlayDiag = null;
+  const _t = _now();
+  if (_t - _lastSkinDiagAt >= SKIN_DIAG_THROTTLE_MS) {
+    _lastSkinDiagAt = _t;
+    _overlayDiag = {
+      part,
+      partMesh: null,
+      kind: /** @type {'overlay'} */ ('overlay'),
+      childMatrix: Array.from(m),
+      parentMatrix: null,
+      jointBoneId: ancestorId,
+      parentBoneId: null,
+      beforeXY: [positions[0], positions[1]],
+      weight0: null,
+      byId,
+    };
+  }
   applyOverlayMatrixFlat(positions, m);
+  if (_overlayDiag) _emitSkinDiag(_overlayDiag, [positions[0], positions[1]]);
   return positions;
+}
+
+/**
+ * One-line summary log for a single skin event. Format is designed for
+ * console-paste legibility: bone name, matrix shorthand
+ * `[m0 m1 m3 m4 m6 m7]` (last column omitted — always [0,0,1]), and the
+ * before/after delta on vertex 0.
+ *
+ * @param {{
+ *   part: object,
+ *   partMesh: object|null,
+ *   kind: 'lbs'|'overlay',
+ *   childMatrix: number[],
+ *   parentMatrix: number[]|null,
+ *   jointBoneId: string,
+ *   parentBoneId: string|null,
+ *   beforeXY: [number, number],
+ *   weight0: number|null,
+ *   byId: Map<string, object>,
+ * }} snap
+ * @param {[number, number]} afterXY
+ */
+function _emitSkinDiag(snap, afterXY) {
+  const childBone = snap.byId.get(snap.jointBoneId);
+  const parentBone = snap.parentBoneId ? snap.byId.get(snap.parentBoneId) : null;
+  const childName = childBone?.name ?? snap.jointBoneId;
+  const parentName = parentBone?.name ?? snap.parentBoneId ?? '—';
+  const fmt6 = (m) => m
+    ? `[${m[0].toFixed(3)} ${m[1].toFixed(3)} ${m[3].toFixed(3)} ${m[4].toFixed(3)} ${m[6].toFixed(1)} ${m[7].toFixed(1)}]`
+    : '—';
+  const [bx, by] = snap.beforeXY;
+  const [ax, ay] = afterXY;
+  const dx = ax - bx;
+  const dy = ay - by;
+  const moved = (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001);
+  logger.info('boneSkinDiag',
+    `part="${snap.part.name ?? snap.part.id}" kind=${snap.kind} child="${childName}":${fmt6(snap.childMatrix)} parent="${parentName}":${fmt6(snap.parentMatrix)} weight0=${snap.weight0 ?? 'n/a'} v0:(${bx.toFixed(1)}, ${by.toFixed(1)})→(${ax.toFixed(1)}, ${ay.toFixed(1)}) Δ=(${dx.toFixed(2)}, ${dy.toFixed(2)})${moved ? '' : ' STATIONARY'}`,
+    {
+      partId: snap.part.id,
+      partName: snap.part.name,
+      kind: snap.kind,
+      jointBoneId: snap.jointBoneId,
+      parentBoneId: snap.parentBoneId,
+      childMatrix: snap.childMatrix,
+      parentMatrix: snap.parentMatrix,
+      weight0: snap.weight0,
+      beforeXY: snap.beforeXY,
+      afterXY,
+      deltaXY: [dx, dy],
+      moved,
+    });
 }
 
 /**
