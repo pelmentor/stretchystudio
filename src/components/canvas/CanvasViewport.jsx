@@ -1145,61 +1145,58 @@ export default function CanvasViewport({
           }
         }
 
-        // PARAM → BONE mirror. Every bone-mirror param
-        // (`ParamRotation_<bone>`) gets injected as a `{rotation: paramValue}`
-        // pose override so the depgraph's TRANSFORM_COMPOSE seeds the
-        // bone's pose from the live param value WITHOUT mutating
-        // `bone.pose.rotation` in projectStore.
+        // PARAM → BONE mirror — PREVIEW-MODE ONLY.
+        //
+        // **2026-06-11 part 2 — REVERTED cbce63f's "runs in all modes"
+        // change.** The drop-gate change was wrong: in editor mode
+        // (staging) the slider is at its DEFAULT value (0) until the
+        // user touches it, so the mirror would write
+        // `poseOverrides[bone].rotation = 0` EVERY FRAME, clobbering
+        // any `bone.pose.rotation` the user had set via skeleton
+        // gesture. The downstream BONE → PARAM mirror then read the
+        // just-written `ov.rotation = 0` and mirrored that BACK to
+        // `valuesForEval[paramId]`, hiding the gesture entirely.
+        // TRANSFORM_COMPOSE saw rotation=0, bone WORLD identity,
+        // overlay / LBS no-op → "bones don't move the arm" report.
+        //
+        // The correct semantic for editor mode is: `bone.pose.rotation`
+        // is the canonical INPUT (skeleton gesture, R-modal, GizmoOverlay
+        // all write to it via writePoseValues). TRANSFORM_COMPOSE's
+        // applyPoseOverrides falls back to `getBonePose(node)` when no
+        // override is present, so bone gestures already drive the bone
+        // WORLD matrix end-to-end without this mirror. BONE → PARAM
+        // (below) mirrors the gesture INTO the slider position for
+        // display.
+        //
+        // PARAM → BONE remains in PREVIEW mode where there IS no
+        // gesture surface — every input flows through param values
+        // (cursor look, action playback, physics) and the mirror is
+        // the only way the bone gets its rotation.
         //
         // Mutating projectStore from a per-frame driver would re-fire
         // `rigSpecStore.js:265`'s subscriber, regenerate the rigSpec
         // object identity, and reset `cubismPhysicsKernel` state via
         // the identity check at line 884 — every rule's pendulum
         // velocity would zero out each frame, producing the saturate-
-        // to-min/max jitter pattern. The driver-overlay path is the
-        // Blender-native equivalent: `bone.pose.rotation` is the user's
-        // authored channel; live runtime drivers (physics, anim
-        // playback) ride on top via the override Map. See
-        // [[physics-bone-mirror-overlay]].
-        //
-        // **2026-06-11 — runs in ALL viewport modes (was preview-only).**
-        // Pre-fix this was gated on `previewModeRef.current`, so the
-        // Parameters-panel `ParamRotation_<bone>` slider only deformed
-        // the mesh in Live Preview. In editor mode (staging /
-        // animation) the slider did nothing — bones only moved on
-        // skeleton-gesture writes to `bone.pose.rotation`. Dropping
-        // the gate makes the slider an equal first-class input
-        // alongside the gesture in every mode: in staging it acts as
-        // a live overlay (no projectStore mutation, no undo entry);
-        // in animation it composes with action fcurves via the
-        // `existing.rotation` guard below (action fcurves win).
-        //
-        // No feedback loop with the downstream BONE → PARAM mirror —
-        // the latter reads `poseOverrides[boneId].rotation` first and
-        // mirrors that exact value back into `valuesForEval[paramId]`;
-        // both directions converge on the same number per frame.
+        // to-min/max jitter pattern. The override-Map path keeps
+        // bone.pose.rotation the user's authored channel; live
+        // runtime drivers (physics, anim playback) ride on top via
+        // the override Map. See [[physics-bone-mirror-overlay]].
         //
         // Animation mode wins on the same bone: if an action fcurve
         // already set a `rotation` override, we skip — keyframe
         // authoring is more explicit than live slider overlay.
-        {
+        if (previewModeRef.current) {
           const _boneMirror = useParamValuesStore.getState().boneMirror?.byParam;
           if (_boneMirror && _boneMirror.size > 0) {
             for (const [paramId, boneId] of _boneMirror) {
               const v = valuesForEval[paramId];
-              // Audit C1 (2026-06-11) — keep the finite-number guard
-              // but DROP the `v === 0` short-circuit. The previous
-              // skip was safe in preview-only mode because the
-              // downstream BONE → PARAM mirror always fell back to
-              // `bone.pose.rotation`. In staging mode it broke the
-              // slider-back-to-rest behaviour: user drags slider to
-              // 45°, commits a pose gesture, then drags the slider
-              // back to 0°. PARAM → BONE skipped on the zero, BONE
-              // → PARAM read the committed `bone.pose.rotation = 45`
-              // from projectStore, slider at 0 was overridden, mesh
-              // stayed deformed. Writing `{rotation: 0}` into
-              // `poseOverrides` is harmless and lets the slider
-              // explicitly return to rest.
+              // eed3022 audit C1 — keep the finite-number guard but
+              // NOT the `v === 0` short-circuit. In preview mode the
+              // BONE → PARAM mirror does not run (no gesture surface),
+              // so the slider needs to be able to drive the bone all
+              // the way back to rest. Writing `{rotation: 0}` is
+              // harmless and required for slider-to-rest.
               if (typeof v !== 'number' || !Number.isFinite(v)) continue;
               if (!poseOverrides) poseOverrides = new Map();
               const existing = poseOverrides.get(boneId);
