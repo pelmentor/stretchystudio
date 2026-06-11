@@ -484,6 +484,25 @@ export default function CanvasViewport({
     return () => ro.disconnect();
   }, []);
   
+  /* ── Brush cursor lifecycle ──────────────────────────────────────────
+     Mirrors Blender's `WM_paint_cursor_end` semantic
+     (`reference/blender/source/blender/windowmanager/intern/wm_paint_cursor.cc`):
+     the brush cursor is owned by the tool. When the tool deactivates
+     (mode change, sub-mode change, toolMode change, shape-key change),
+     the cursor must be removed — Blender does this via the cursor
+     handler list owned by `wmPaintCursor`. Pre-fix, SS only re-evaluated
+     brushCircle / propEditCircle visibility inside `onPointerMove`,
+     so any mode transition that didn't move the cursor left the last
+     `visibility="visible"` state stuck on screen across modes (user
+     2026-06-11: "that radius sometimes persists in all modes I can't
+     get rid of the visual radius thing"). Hide imperatively on every
+     mode-relevant state change; the next pointermove will re-show it
+     if the new mode is a brush mode. */
+  useEffect(() => {
+    brushCircleRef.current?.setAttribute('visibility', 'hidden');
+    propEditCircleRef.current?.setAttribute('visibility', 'hidden');
+  }, [editMode, toolMode, meshSubMode, activeBlendShapeId, previewMode]);
+
   /* ── GPU Sync: Ensure nodes in store have matching WebGL resources ── */
   useEffect(() => {
     const scene = sceneRef.current;

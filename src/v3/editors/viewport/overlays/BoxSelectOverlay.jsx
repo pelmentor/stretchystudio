@@ -58,6 +58,7 @@ export function BoxSelectOverlay() {
   const currentClient   = useBoxSelectStore((s) => s.currentClient);
   const pathClient      = useBoxSelectStore((s) => s.pathClient);
   const gestureModifier = useBoxSelectStore((s) => s.gestureModifier);
+  const anchor          = useBoxSelectStore((s) => s.anchor);
   const update          = useBoxSelectStore((s) => s.update);
   const commit          = useBoxSelectStore((s) => s.commit);
   const cancel          = useBoxSelectStore((s) => s.cancel);
@@ -75,12 +76,33 @@ export function BoxSelectOverlay() {
   useEffect(() => {
     if (!kind) return;
 
+    function onMouseDown(e) {
+      // Box-select armed-but-not-anchored phase: first LMB-down anchors
+      // the box at the click point and transitions the modal to dragging.
+      // Mirrors Blender's `Gesture Box` modal map `BEGIN` action firing
+      // on LEFTMOUSE PRESS (blender_default.py:6265). For lasso, the
+      // Ctrl+LMB-drag invoker already anchored via `begin()` so this is
+      // a no-op (startClient is already set).
+      if (e.button !== 0) return;
+      if (kind === 'box' && !startClient) {
+        e.preventDefault();
+        e.stopPropagation();
+        anchor({ x: e.clientX, y: e.clientY });
+      }
+    }
+
     function onMouseMove(e) {
+      // Skip moves before the click anchor — armed-but-not-anchored
+      // phase shows nothing; first cursor update happens at anchor time.
+      if (!startClient) return;
       update({ x: e.clientX, y: e.clientY });
     }
 
     function onMouseUp(e) {
       if (e.button !== 0) return;
+      // LMB-up before anchor (impossible normally, but defensive) is a
+      // no-op — there's nothing to commit.
+      if (!startClient) return;
       e.preventDefault();
       // Phase 1.B-fix — for lasso, Ctrl is the gesture-starter so it
       // can't double as a commit-time modifier. Use the modifier
@@ -121,17 +143,19 @@ export function BoxSelectOverlay() {
       }
     }
 
+    window.addEventListener('mousedown', onMouseDown, { capture: true });
     window.addEventListener('mousemove', onMouseMove, { capture: true });
     window.addEventListener('mouseup', onMouseUp, { capture: true });
     window.addEventListener('contextmenu', onContextMenu, { capture: true });
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => {
+      window.removeEventListener('mousedown', onMouseDown, { capture: true });
       window.removeEventListener('mousemove', onMouseMove, { capture: true });
       window.removeEventListener('mouseup', onMouseUp, { capture: true });
       window.removeEventListener('contextmenu', onContextMenu, { capture: true });
       window.removeEventListener('keydown', onKeyDown, { capture: true });
     };
-  }, [kind, mode, editPartId, startClient, pathClient, update, commit, cancel]);
+  }, [kind, mode, editPartId, startClient, pathClient, gestureModifier, anchor, update, commit, cancel]);
 
   // Compute the visible rect / path in viewport-px once per render.
   const drawn = useMemo(() => {

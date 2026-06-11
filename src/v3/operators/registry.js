@@ -1193,11 +1193,16 @@ function registerBuiltins() {
       const isEditModeOnPart = editor.editMode === 'edit'
         && typeof editor.selection?.[0] === 'string'
         && editor.selection[0].length > 0;
-      useBoxSelectStore.getState().begin({
+      // Blender-faithful: `arm()` puts the modal in "waiting for LMB-down"
+      // state — no anchor at B-press time. The overlay's onMouseDown
+      // handler calls `anchor(client)` on first LMB-down, mirroring
+      // Blender's `Gesture Box` modal map (`BEGIN` action fires on
+      // LEFTMOUSE PRESS, not on operator invoke; see
+      // `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:6265`).
+      useBoxSelectStore.getState().arm({
         kind: 'box',
         mode: isEditModeOnPart ? 'edit' : 'object',
         editPartId: isEditModeOnPart ? editor.selection[0] : null,
-        startClient: lastMousePos(),
       });
     },
   });

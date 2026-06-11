@@ -235,13 +235,23 @@ export function CircleSelectOverlay() {
         cancel();
         return;
       }
-      // Audit fix G-4 — catch-all swallow for any chord that would
-      // otherwise leak through to the dispatcher's bubble listener and
-      // mount a competing modal (G/E/R/S/B/M etc. would all open
-      // ModalTransform / extrude / BoxSelect / Merge popover on top of
-      // the active circle-select). Same pattern as Phase 5 G-4 fix
-      // applied to ModalVertexTransformOverlay.
-      e.stopPropagation();
+      // Pass-through (no stopPropagation) — Blender's
+      // `View3D Gesture Circle` modal map at
+      // `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:6229-6246`
+      // only enumerates: ESC, RMB, RET, NUMPAD_ENTER, LMB, MMB, wheel,
+      // NUMPAD_PLUS/MINUS, TRACKPADPAN. Everything else returns
+      // `OPERATOR_PASS_THROUGH` from `WM_gesture_circle_modal`
+      // (`wm_gesture_ops.cc`) and falls down the handler stack — that's
+      // how X-deletes-selected fires WHILE circle-select stays armed,
+      // matching the in-modal-edit pattern the user expects (user
+      // 2026-06-11: "i select then press x — nothing happens until i
+      // exit that tool"). Pre-fix this handler had a catch-all
+      // `stopPropagation()` (audit G-4 era) to block competing modal
+      // openers (G/R/S/B/M); the right answer per Blender is modal
+      // stacking, not modal-blocking. Drop the catch-all here; any
+      // resulting modal-on-modal stacking issues are addressed at the
+      // dispatcher layer in a follow-up framework slice, not by
+      // re-swallowing keys.
     }
 
     window.addEventListener('mousemove', onMouseMove, { capture: true });
