@@ -44,6 +44,8 @@ import { cutMeshAlongLine } from './edit/knife.js';
 import { subdivide } from './edit/subdivide.js';
 import { extrude, countSelectedBoundary } from './edit/extrude.js';
 import { autoSkinAllParts } from '../../io/live2d/rig/autoSkinning.js';
+import { applyBakePhysics } from './bakePhysics.js';
+import { getActiveSceneAction } from '../../anim/sceneAction.js';
 import { logger } from '../../lib/logger.js';
 
 /** Dedupe signature for the transform.rotate diagnostic. Spamming R
@@ -249,6 +251,81 @@ function registerBuiltins() {
         }
       }
       a.play();
+    },
+  });
+
+  // Bake Physics onto the active action. Steps the cubismPhysicsKernel
+  // through the action's frame range at fixed dt, sampling the input
+  // fcurves (head/body/arm rotations the user authored) and writing the
+  // resulting hair/clothing/sway output values back as fresh fcurves on
+  // the SAME action. Existing fcurves on the output paramIds are
+  // REPLACED (clear + re-emit) so re-baking doesn't double-stack curves;
+  // non-output fcurves (the user's input curves) are preserved.
+  //
+  // After baking, the action is self-contained: PNG sequence / motion3
+  // / NLA all see the physics behaviour without needing a live tick.
+  // This is the user-facing answer to "physics doesn't auto-key from
+  // AutoKey" — instead of a per-frame online capture (which fights the
+  // viewport cache + introduces feedback loops), bake offline against
+  // the authored animation.
+  registerOperator({
+    id: 'anim.bakePhysics',
+    label: 'Bake Physics onto Active Action',
+    available: () => {
+      const proj = useProjectStore.getState().project;
+      if (!proj) return false;
+      const active = getActiveSceneAction(proj, useAnimationStore.getState().activeActionId);
+      return !!active;
+    },
+    exec: () => {
+      const proj = useProjectStore.getState().project;
+      if (!proj) {
+        toast({ title: 'No project', description: 'Open or create a project first.' });
+        return;
+      }
+      const active = getActiveSceneAction(proj, useAnimationStore.getState().activeActionId);
+      if (!active) {
+        toast({ title: 'No active action', description: 'Select an action to bake into.' });
+        return;
+      }
+      const t0 = Date.now();
+      let bakeResult = null;
+      useProjectStore.getState().updateProject((p) => {
+        bakeResult = applyBakePhysics(p, active.id, {
+          frameStartMs: typeof active.frameStart === 'number' ? active.frameStart : 0,
+          frameEndMs: typeof active.frameEnd === 'number'
+            ? active.frameEnd
+            : (typeof active.duration === 'number' ? active.duration : 2000),
+          stepMs: 1000 / (typeof active.fps === 'number' && active.fps > 0 ? active.fps : 24),
+          preRollMs: 500,
+        });
+      });
+      if (!bakeResult) {
+        toast({
+          title: 'Bake failed',
+          description: 'Could not bake — see Logs panel for details.',
+          variant: 'destructive',
+        });
+        logger.warn('bakePhysics', `applyBakePhysics returned null for actionId=${active.id}`);
+        return;
+      }
+      const r = /** @type {any} */ (bakeResult);
+      if (r.ruleCount === 0) {
+        toast({
+          title: 'Nothing to bake',
+          description: 'No physics rules in this project.',
+        });
+        return;
+      }
+      const ms = Date.now() - t0;
+      logger.info('bakePhysics',
+        `Baked ${r.sampleCount} sample(s) × ${r.outputParamIds.length} output(s) `
+        + `= ${r.keysWritten} key(s) onto "${active.name ?? active.id}" in ${ms}ms`,
+        { actionId: active.id, ...r, durationMs: ms });
+      toast({
+        title: 'Physics baked',
+        description: `${r.keysWritten} keys across ${r.outputParamIds.length} params, ${r.sampleCount} samples.`,
+      });
     },
   });
 

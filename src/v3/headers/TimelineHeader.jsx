@@ -41,7 +41,7 @@
  */
 
 import { useMemo } from 'react';
-import { Clock, ChevronDown } from 'lucide-react';
+import { Clock, ChevronDown, Wind } from 'lucide-react';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useAnimationStore } from '../../store/animationStore.js';
 import { getActiveSceneAction } from '../../anim/sceneAction.js';
@@ -88,6 +88,25 @@ export function TimelineHeader() {
       </span>
       <span className="text-[10px] text-muted-foreground/70 ml-1 truncate">{subtitle}</span>
       <span className="flex-1" />
+
+      {/* Bake Physics — turn the active action's input curves through the
+          cubismPhysicsKernel and write hair/clothing/sway outputs back as
+          fresh keyframes on the same action. Closes the "physics doesn't
+          auto-key" gap (user 2026-06-11) — instead of fighting per-frame
+          online capture, bake offline against the authored animation. */}
+      <button
+        type="button"
+        disabled={!isAvailable('anim.bakePhysics')}
+        onClick={() => runOperator('anim.bakePhysics')}
+        title="Step the physics simulation through this action's input curves and write the hair/clothing/sway output as fcurves on the same action."
+        className="px-1.5 py-0.5 rounded-sm hover:bg-background/60
+                   focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/60
+                   flex items-center gap-1 text-foreground/80
+                   disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <Wind size={11} />
+        Bake Physics
+      </button>
 
       {/* View menu — Blender's TIMELINE-mode menu set (View + Marker; Marker deferred). */}
       <DropdownMenu>
