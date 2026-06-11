@@ -48,6 +48,7 @@ import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useCircleSelectStore } from '../../store/circleSelectStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
+import { ModalToolInputDispatcher } from '../modalTool/index.js';
 
 const SaveModal = lazy(() =>
   import('./SaveModal.jsx').then((m) => ({ default: m.SaveModal }))
@@ -129,6 +130,11 @@ export function AppShell() {
 
   return (
     <ErrorBoundary label="AppShell">
+      {/* Modal-tool framework — single window-level event dispatcher.
+          Owns capture-phase input routing for every modal tool registered
+          via `useModalTool`. Mounts once at AppShell. See
+          `src/v3/modalTool/InputDispatcher.jsx` for the dispatch loop. */}
+      <ModalToolInputDispatcher />
       <div className="flex flex-col h-screen w-screen bg-background text-foreground relative">
         <Topbar />
         <StaleRigBanner />

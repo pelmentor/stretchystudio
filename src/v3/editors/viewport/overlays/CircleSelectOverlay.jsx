@@ -73,8 +73,9 @@
  * @module v3/editors/viewport/overlays/CircleSelectOverlay
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useCircleSelectStore } from '../../../../store/circleSelectStore.js';
+import { useModalTool } from '../../../modalTool/index.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
@@ -127,148 +128,117 @@ export function CircleSelectOverlay() {
   const frameMapRef      = useRef(/** @type {Map<string, Float32Array | number[]> | null} */ (null));
   const cachedProjectRef = useRef(/** @type {any} */ (null));
 
-  useEffect(() => {
-    if (!active) return;
-
-    function onMouseMove(e) {
-      setCursor({ x: e.clientX, y: e.clientY });
+  // Modal-tool framework registration. The InputDispatcher mounted at
+  // AppShell walks the active stack and consults this handler. Returning
+  // 'PASS_THROUGH' lets unhandled events (X to delete, etc.) fall to
+  // the operator dispatcher — mirrors Blender's `WM_gesture_circle_modal`
+  // PASS_THROUGH semantic (`wm_event_system.cc:2725`). Returning
+  // 'RUNNING_MODAL' / 'CANCELLED' stops propagation.
+  const handleEvent = useCallback(/** @returns {import('../../../modalTool/index.js').useModalToolStore extends never ? never : 'PASS_THROUGH'|'RUNNING_MODAL'|'CANCELLED'|undefined} */ (e) => {
+    if (e.type === 'mousemove') {
+      const me = /** @type {MouseEvent} */ (e);
+      setCursor({ x: me.clientX, y: me.clientY });
       if (paintingRef.current) {
         runPaintTick({
           mode, editPartId,
-          cursorClient: { x: e.clientX, y: e.clientY },
+          cursorClient: { x: me.clientX, y: me.clientY },
           radiusPx: radiusRef.current,
           paintMode: paintModeRef.current ?? 'add',
           worldMatricesRef, frameMapRef, cachedProjectRef,
         });
       }
+      // Mousemove passes through — other modals (none currently) and
+      // native handlers (cursor visualizations etc.) still need it.
+      return 'PASS_THROUGH';
     }
 
-    function beginPaintStroke(pm, e) {
-      // Audit fix G-3 — populate the per-stroke caches once. Subsequent
-      // mousemove ticks read these refs instead of rebuilding.
-      cachedProjectRef.current = useProjectStore.getState().project;
-      worldMatricesRef.current = computeWorldMatrices(cachedProjectRef.current.nodes);
-      // frameMap is built lazily in `runPaintTick` when frames are
-      // available; for a stroke that runs entirely without a frame
-      // dictionary (e.g. test environments), null is the correct value.
-      frameMapRef.current = null;
-      startPaint(pm);
-      runPaintTick({
-        mode, editPartId,
-        cursorClient: { x: e.clientX, y: e.clientY },
-        radiusPx: radiusRef.current,
-        paintMode: pm,
-        worldMatricesRef, frameMapRef, cachedProjectRef,
-      });
-    }
-
-    function endPaintStroke() {
-      // Clear caches so a stale matrix doesn't leak into the next stroke
-      // if the project mutated between strokes (defensive — Modal G is
-      // the only other Edit-Mode mutator and it can't run while a circle
-      // select stroke is in flight, but cheap to be paranoid).
-      worldMatricesRef.current = null;
-      frameMapRef.current = null;
-      cachedProjectRef.current = null;
-      endPaint();
-    }
-
-    function onMouseDown(e) {
+    if (e.type === 'mousedown') {
+      const me = /** @type {MouseEvent} */ (e);
       // Audit fix D-5 — accept LMB (button 0) AND MMB (button 1).
       // MMB starts a subtract stroke directly (Blender's pen-tablet
       // friendly subtract path: `blender_default.py:6239`
       // `MIDDLEMOUSE` → `DESELECT`). LMB respects Shift for subtract.
+      /** @type {'add'|'subtract'} */
       let pm;
-      if (e.button === 0)      pm = e.shiftKey ? 'subtract' : 'add';
-      else if (e.button === 1) pm = 'subtract';
-      else                     return;
+      if (me.button === 0)      pm = me.shiftKey ? 'subtract' : 'add';
+      else if (me.button === 1) pm = 'subtract';
+      else                       return 'PASS_THROUGH';
       e.preventDefault();
-      e.stopPropagation();
-      beginPaintStroke(pm, e);
+      // Audit fix G-3 — populate the per-stroke caches once. Subsequent
+      // mousemove ticks read these refs instead of rebuilding.
+      cachedProjectRef.current = useProjectStore.getState().project;
+      worldMatricesRef.current = computeWorldMatrices(cachedProjectRef.current.nodes);
+      frameMapRef.current = null;
+      startPaint(pm);
+      runPaintTick({
+        mode, editPartId,
+        cursorClient: { x: me.clientX, y: me.clientY },
+        radiusPx: radiusRef.current,
+        paintMode: pm,
+        worldMatricesRef, frameMapRef, cachedProjectRef,
+      });
+      return 'RUNNING_MODAL';
     }
 
-    function onMouseUp(e) {
-      if (e.button !== 0 && e.button !== 1) return;
+    if (e.type === 'mouseup') {
+      const me = /** @type {MouseEvent} */ (e);
+      if (me.button !== 0 && me.button !== 1) return 'PASS_THROUGH';
       e.preventDefault();
-      e.stopPropagation();
-      endPaintStroke();
+      // Clear caches so a stale matrix doesn't leak into the next stroke.
+      worldMatricesRef.current = null;
+      frameMapRef.current = null;
+      cachedProjectRef.current = null;
+      endPaint();
+      return 'RUNNING_MODAL';
     }
 
-    function onWheel(e) {
+    if (e.type === 'wheel') {
+      const we = /** @type {WheelEvent} */ (e);
       e.preventDefault();
-      e.stopPropagation();
       // Audit fix D-1 — Blender's `View3D Gesture Circle` modal map
-      // binds `WHEELUPMOUSE = SUBTRACT` (shrink) and
-      // `WHEELDOWNMOUSE = ADD` (grow). Pre-fix this overlay implemented
-      // the OPPOSITE (wheel-up grew the circle), with a comment falsely
-      // claiming the opposite-of-Blender was "Blender convention". Both
-      // the comment and the implementation were wrong.
-      // `deltaY < 0` is wheel-up on most browsers → SHRINK.
-      const dir = e.deltaY < 0 ? -1 : +1;
+      // binds `WHEELUPMOUSE = SUBTRACT` (shrink) and `WHEELDOWNMOUSE = ADD`
+      // (grow). `deltaY < 0` is wheel-up on most browsers → SHRINK.
+      const dir = we.deltaY < 0 ? -1 : +1;
       setRadius(radiusRef.current + dir * WHEEL_RADIUS_STEP_PX);
+      return 'RUNNING_MODAL';
     }
 
-    function onContextMenu(e) {
-      // Audit fix G-5 — preventDefault was already there; stopPropagation
-      // was missing. Without it, any future bubble-phase right-click
-      // listener fires after `cancel()` has closed the modal, seeing
-      // stale state. All sibling handlers (mousedown/up/wheel) call
-      // stopPropagation; this was the exception.
+    if (e.type === 'contextmenu') {
       e.preventDefault();
-      e.stopPropagation();
       cancel();
+      return 'CANCELLED';
     }
 
-    function onKeyDown(e) {
-      if (e.key === 'Escape' || e.key === 'Enter') {
+    if (e.type === 'keydown') {
+      const ke = /** @type {KeyboardEvent} */ (e);
+      if (ke.key === 'Escape' || ke.key === 'Enter') {
         e.preventDefault();
-        e.stopPropagation();
         cancel();
-        return;
+        return 'CANCELLED';
       }
       // SS-only off-toggle (audit D-8): bare `C` re-toggles Circle
       // Select OFF. Blender's modal map has no `C` binding — but the
       // affordance matches the activation chord's "toggle" feel.
-      if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      if (ke.code === 'KeyC' && !ke.ctrlKey && !ke.metaKey && !ke.altKey && !ke.shiftKey) {
         e.preventDefault();
-        e.stopPropagation();
         cancel();
-        return;
+        return 'CANCELLED';
       }
-      // Pass-through (no stopPropagation) — Blender's
-      // `View3D Gesture Circle` modal map at
-      // `reference/blender/scripts/presets/keyconfig/keymap_data/blender_default.py:6229-6246`
-      // only enumerates: ESC, RMB, RET, NUMPAD_ENTER, LMB, MMB, wheel,
-      // NUMPAD_PLUS/MINUS, TRACKPADPAN. Everything else returns
-      // `OPERATOR_PASS_THROUGH` from `WM_gesture_circle_modal`
-      // (`wm_gesture_ops.cc`) and falls down the handler stack — that's
-      // how X-deletes-selected fires WHILE circle-select stays armed,
-      // matching the in-modal-edit pattern the user expects (user
-      // 2026-06-11: "i select then press x — nothing happens until i
-      // exit that tool"). Pre-fix this handler had a catch-all
-      // `stopPropagation()` (audit G-4 era) to block competing modal
-      // openers (G/R/S/B/M); the right answer per Blender is modal
-      // stacking, not modal-blocking. Drop the catch-all here; any
-      // resulting modal-on-modal stacking issues are addressed at the
-      // dispatcher layer in a follow-up framework slice, not by
-      // re-swallowing keys.
+      // Everything else: pass through. X / Delete / G / R / S / B / I /
+      // Ctrl+Z all reach the operator dispatcher and run while
+      // circle-select stays armed. Mirrors Blender's
+      // `View3D Gesture Circle` modal map at `blender_default.py:6229-6246`
+      // where only the enumerated events are owned; everything else
+      // returns `OPERATOR_PASS_THROUGH` from `WM_gesture_circle_modal`
+      // (`wm_event_system.cc:2725`). User 2026-06-11: "i select then
+      // press x — nothing happens until i exit that tool."
+      return 'PASS_THROUGH';
     }
 
-    window.addEventListener('mousemove', onMouseMove, { capture: true });
-    window.addEventListener('mousedown', onMouseDown, { capture: true });
-    window.addEventListener('mouseup', onMouseUp, { capture: true });
-    window.addEventListener('wheel', onWheel, { capture: true, passive: false });
-    window.addEventListener('contextmenu', onContextMenu, { capture: true });
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove, { capture: true });
-      window.removeEventListener('mousedown', onMouseDown, { capture: true });
-      window.removeEventListener('mouseup', onMouseUp, { capture: true });
-      window.removeEventListener('wheel', onWheel, { capture: true });
-      window.removeEventListener('contextmenu', onContextMenu, { capture: true });
-      window.removeEventListener('keydown', onKeyDown, { capture: true });
-    };
-  }, [active, mode, editPartId, setCursor, setRadius, startPaint, endPaint, cancel]);
+    return 'PASS_THROUGH';
+  }, [mode, editPartId, setCursor, setRadius, startPaint, endPaint, cancel]);
+
+  useModalTool({ id: 'circleSelect', isActive: active, handleEvent });
 
   const drawn = useMemo(() => {
     if (!active || !cursorClient) return null;

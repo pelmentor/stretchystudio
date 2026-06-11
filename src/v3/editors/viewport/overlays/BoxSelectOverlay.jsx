@@ -34,8 +34,9 @@
  * @module v3/editors/viewport/overlays/BoxSelectOverlay
  */
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useBoxSelectStore } from '../../../../store/boxSelectStore.js';
+import { useModalTool } from '../../../modalTool/index.js';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
 import { useSelectionStore } from '../../../../store/selectionStore.js';
@@ -73,89 +74,98 @@ export function BoxSelectOverlay() {
     viewRef.current = useEditorStore.getState().viewByMode.viewport;
   }, [kind]);
 
-  useEffect(() => {
-    if (!kind) return;
-
-    function onMouseDown(e) {
+  // Modal-tool framework registration. Replaces the prior per-overlay
+  // `window.addEventListener` racing. See `src/v3/modalTool/` for the
+  // dispatcher and the Blender modal-handler-stack semantic it mirrors.
+  const handleEvent = useCallback(/** @returns {'PASS_THROUGH'|'RUNNING_MODAL'|'FINISHED'|'CANCELLED'|undefined} */ (e) => {
+    if (e.type === 'mousedown') {
+      const me = /** @type {MouseEvent} */ (e);
       // Box-select armed-but-not-anchored phase: first LMB-down anchors
       // the box at the click point and transitions the modal to dragging.
       // Mirrors Blender's `Gesture Box` modal map `BEGIN` action firing
       // on LEFTMOUSE PRESS (blender_default.py:6265). For lasso, the
       // Ctrl+LMB-drag invoker already anchored via `begin()` so this is
-      // a no-op (startClient is already set).
-      if (e.button !== 0) return;
+      // a no-op (startClient is already set, falls through).
+      if (me.button !== 0) return 'PASS_THROUGH';
       if (kind === 'box' && !startClient) {
         e.preventDefault();
-        e.stopPropagation();
-        anchor({ x: e.clientX, y: e.clientY });
+        anchor({ x: me.clientX, y: me.clientY });
+        return 'RUNNING_MODAL';
       }
+      return 'PASS_THROUGH';
     }
 
-    function onMouseMove(e) {
+    if (e.type === 'mousemove') {
+      const me = /** @type {MouseEvent} */ (e);
       // Skip moves before the click anchor — armed-but-not-anchored
       // phase shows nothing; first cursor update happens at anchor time.
-      if (!startClient) return;
-      update({ x: e.clientX, y: e.clientY });
+      if (!startClient) return 'PASS_THROUGH';
+      update({ x: me.clientX, y: me.clientY });
+      return 'PASS_THROUGH';
     }
 
-    function onMouseUp(e) {
-      if (e.button !== 0) return;
+    if (e.type === 'mouseup') {
+      const me = /** @type {MouseEvent} */ (e);
+      if (me.button !== 0) return 'PASS_THROUGH';
       // LMB-up before anchor (impossible normally, but defensive) is a
       // no-op — there's nothing to commit.
-      if (!startClient) return;
+      if (!startClient) return 'PASS_THROUGH';
       e.preventDefault();
       // Phase 1.B-fix — for lasso, Ctrl is the gesture-starter so it
       // can't double as a commit-time modifier. Use the modifier
       // captured at gesture start (`gestureModifier`); fall back to
       // commit-time read for box (where modifiers are pure compose).
       const modifier = kind === 'lasso'
-        ? (gestureModifier ?? (e.shiftKey ? 'add' : 'replace'))
-        : (e.shiftKey ? 'add' : (e.ctrlKey || e.metaKey) ? 'subtract' : 'replace');
+        ? (gestureModifier ?? (me.shiftKey ? 'add' : 'replace'))
+        : (me.shiftKey ? 'add' : (me.ctrlKey || me.metaKey) ? 'subtract' : 'replace');
       runCommit({
         kind, mode, editPartId, startClient,
-        endClient: { x: e.clientX, y: e.clientY },
+        endClient: { x: me.clientX, y: me.clientY },
         pathClient,
         modifier,
       });
       commit();
+      return 'FINISHED';
     }
 
-    function onContextMenu(e) {
+    if (e.type === 'contextmenu') {
       e.preventDefault();
       cancel();
+      return 'CANCELLED';
     }
 
-    function onKeyDown(e) {
-      if (e.key === 'Escape') {
+    if (e.type === 'keydown') {
+      const ke = /** @type {KeyboardEvent} */ (e);
+      if (ke.key === 'Escape') {
         e.preventDefault();
         cancel();
-        return;
+        return 'CANCELLED';
       }
       // Toolset Phase 1.A — mid-drag A toggles "select all under" semantics
       // (Blender pattern). Object Mode → select every visible part; Edit
       // Mode → select every vertex of the active part. Modifier respected
       // (Shift = add to existing selection; Ctrl = subtract from it).
-      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (ke.code === 'KeyA' && !ke.ctrlKey && !ke.metaKey && !ke.altKey) {
         e.preventDefault();
-        const selectAllModifier = e.shiftKey ? 'add' : 'replace';
+        const selectAllModifier = ke.shiftKey ? 'add' : 'replace';
         runSelectAllUnder({ mode, editPartId, modifier: selectAllModifier });
         cancel();
+        return 'FINISHED';
       }
+      // Everything else passes through. Box-select is more restrictive
+      // than circle-select about what runs alongside it (a mid-drag G
+      // would conflict with the drag), but mirroring Blender's modal
+      // map (`blender_default.py:6259-6270`) which only owns Esc, RMB,
+      // LMB+modifiers, MMB, Space — anything else falls through. The
+      // dispatcher framework leaves the user's chord wisdom (don't
+      // press G mid-box-drag) intact rather than swallowing keys.
+      return 'PASS_THROUGH';
     }
 
-    window.addEventListener('mousedown', onMouseDown, { capture: true });
-    window.addEventListener('mousemove', onMouseMove, { capture: true });
-    window.addEventListener('mouseup', onMouseUp, { capture: true });
-    window.addEventListener('contextmenu', onContextMenu, { capture: true });
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener('mousedown', onMouseDown, { capture: true });
-      window.removeEventListener('mousemove', onMouseMove, { capture: true });
-      window.removeEventListener('mouseup', onMouseUp, { capture: true });
-      window.removeEventListener('contextmenu', onContextMenu, { capture: true });
-      window.removeEventListener('keydown', onKeyDown, { capture: true });
-    };
+    return 'PASS_THROUGH';
   }, [kind, mode, editPartId, startClient, pathClient, gestureModifier, anchor, update, commit, cancel]);
+
+  useModalTool({ id: 'boxSelect', isActive: !!kind, handleEvent });
 
   // Compute the visible rect / path in viewport-px once per render.
   const drawn = useMemo(() => {
