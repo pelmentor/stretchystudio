@@ -100,6 +100,19 @@ export const DEFAULT_KEYMAP = {
   'ArrowDown':        'time.jumpToPrevKeyframe',
   'ArrowUp':          'time.jumpToNextKeyframe',
 
+  // [ and ] set the animation range start / end at the current frame.
+  // Used by animators to trim playback to a section they're iterating
+  // on — keyforms outside the new range still exist but stop being
+  // evaluated during play. Sibling to Shift+Arrow which JUMPS to the
+  // start/end; these define what start/end ARE.
+  //
+  // Gated to fire only when hovering an animation editor (timeline /
+  // dopesheet / fcurve) — bracket keys in other editors stay free for
+  // their usual UI roles (proportional-edit radius nudge in Edit
+  // Mode uses Ctrl+[/Ctrl+], not bare).
+  'BracketLeft':      'time.setRangeStartAtCurrent',
+  'BracketRight':     'time.setRangeEndAtCurrent',
+
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 

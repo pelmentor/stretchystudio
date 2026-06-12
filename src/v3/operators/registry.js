@@ -894,6 +894,46 @@ function registerBuiltins() {
     },
   });
 
+  // Phase 4 paint-fidelity follow-up — [ / ] set animation range
+  // start / end at current frame. Trims the playback range without
+  // touching the action's fcurves — keyforms outside the new range
+  // still exist but stop being evaluated during play. Sibling to
+  // Shift+ArrowLeft/Right (jump to start/end of range) — these
+  // chords let the user define what "start" and "end" mean.
+  //
+  // SS deviation from Blender: Blender uses a dedicated "Preview
+  // Range" pair (preview_frame_start / preview_frame_end) separate
+  // from the action's frame_start / frame_end. SS has a single global
+  // startFrame / endFrame on the animationStore (no separate preview
+  // range yet); [/] write that. When/if SS grows a separate preview
+  // range field, these operators should split into:
+  //   - bare [/] → set preview range
+  //   - Ctrl+[/] → set action range
+  // matching Blender's hierarchy.
+  registerOperator({
+    id: 'time.setRangeStartAtCurrent',
+    label: 'Set Range Start to Current Frame',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const fps = anim.fps || 30;
+      const curFrame = Math.round((anim.currentTime ?? 0) * fps / 1000);
+      anim.setStartFrame(curFrame);
+    },
+  });
+
+  registerOperator({
+    id: 'time.setRangeEndAtCurrent',
+    label: 'Set Range End to Current Frame',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const fps = anim.fps || 30;
+      const curFrame = Math.round((anim.currentTime ?? 0) * fps / 1000);
+      anim.setEndFrame(curFrame);
+    },
+  });
+
   // file.new — opens the New Project template picker (mounts in
   // Topbar.jsx, gated by `newProjectDialogStore.open`). The dialog
   // owns reset + template-apply + dirty-warning UX. The chord
