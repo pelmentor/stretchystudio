@@ -51,6 +51,7 @@ import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
 import { useBrushRadiusAdjustStore } from '@/store/brushRadiusAdjustStore';
 import { useBrushStrengthAdjustStore } from '@/store/brushStrengthAdjustStore';
 import { useSculptRadiusAdjustStore } from '@/store/sculptRadiusAdjustStore';
+import { useSculptStrengthAdjustStore } from '@/store/sculptStrengthAdjustStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1971,28 +1972,41 @@ export default function CanvasViewport({
     return () => window.removeEventListener('keydown', handler);
   }, [previewMode]);
 
-  /* ── F — Sculpt brush-radius modal ───────────────────────────────────── */
+  /* ── F / Shift+F — Sculpt brush radius/strength modals ───────────────── */
   //
-  // Mirrors Blender's `WM_OT_radial_control` for sculpt brushes — same
-  // gesture as Weight Paint's F (sister code immediately above), but
-  // writes to `editorStore.sculpt.size` instead of `brushSize`.
-  // Sculpt's own brush size is independent per editorStore.js:214-216:
-  // "the user's Edit-Mode brush size is preserved when they Tab into
-  // Sculpt and back".
+  // Mirrors Blender's `WM_OT_radial_control` for sculpt brushes:
+  //   - F      → brush size (`editorStore.sculpt.size`)
+  //   - Shift+F → brush strength (`editorStore.sculpt.strength`)
   //
-  // Sculpt Shift+F (strength) ships in the follow-up commit; both bind
-  // here in the same handler once the strength modal exists.
+  // Sister to the Weight Paint F/Shift+F handler immediately above; the
+  // two share the framework but write to distinct sub-objects (sculpt
+  // brush is independent from weight-paint brush per editorStore.js:
+  // 214-216 — "Edit-Mode brush size is preserved when they Tab into
+  // Sculpt and back").
+  //
+  // While either modal is live the corresponding overlay returns
+  // RUNNING_MODAL so the sculpt stroke can't start (LMB-down would
+  // commit the modal first, not begin a stroke).
   useEffect(() => {
     if (previewMode) return;
     const handler = (e) => {
       if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
       if (editorRef.current.editMode !== 'sculpt') return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'f' && e.key !== 'F') return;
-      if (useSculptRadiusAdjustStore.getState().active) return;
-      e.preventDefault();
-      const startSize = useEditorStore.getState().sculpt?.size ?? 80;
-      useSculptRadiusAdjustStore.getState().begin(startSize);
+      if (e.shiftKey) {
+        if (useSculptStrengthAdjustStore.getState().active) return;
+        e.preventDefault();
+        useSculptStrengthAdjustStore.getState().begin(
+          useEditorStore.getState().sculpt?.strength ?? 0.5,
+        );
+      } else {
+        if (useSculptRadiusAdjustStore.getState().active) return;
+        e.preventDefault();
+        useSculptRadiusAdjustStore.getState().begin(
+          useEditorStore.getState().sculpt?.size ?? 80,
+        );
+      }
       isDirtyRef.current = true;
     };
     window.addEventListener('keydown', handler);

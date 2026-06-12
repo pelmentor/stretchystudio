@@ -50,6 +50,7 @@ import { useRadiusAdjustStore } from '../../store/radiusAdjustStore.js';
 import { useBrushRadiusAdjustStore } from '../../store/brushRadiusAdjustStore.js';
 import { useBrushStrengthAdjustStore } from '../../store/brushStrengthAdjustStore.js';
 import { useSculptRadiusAdjustStore } from '../../store/sculptRadiusAdjustStore.js';
+import { useSculptStrengthAdjustStore } from '../../store/sculptStrengthAdjustStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 import { ModalToolInputDispatcher } from '../modalTool/index.js';
@@ -89,6 +90,9 @@ const BrushStrengthAdjustOverlay = lazy(() =>
 );
 const SculptRadiusAdjustOverlay = lazy(() =>
   import('./SculptRadiusAdjustOverlay.jsx').then((m) => ({ default: m.SculptRadiusAdjustOverlay }))
+);
+const SculptStrengthAdjustOverlay = lazy(() =>
+  import('./SculptStrengthAdjustOverlay.jsx').then((m) => ({ default: m.SculptStrengthAdjustOverlay }))
 );
 const MergeMenu = lazy(() =>
   import('./MergeMenu.jsx').then((m) => ({ default: m.MergeMenu }))
@@ -146,6 +150,7 @@ export function AppShell() {
   const brushRadiusAdjustActive = useBrushRadiusAdjustStore((s) => s.active);
   const brushStrengthAdjustActive = useBrushStrengthAdjustStore((s) => s.active);
   const sculptRadiusAdjustActive = useSculptRadiusAdjustStore((s) => s.active);
+  const sculptStrengthAdjustActive = useSculptStrengthAdjustStore((s) => s.active);
   const wizardStep = useWizardStore((s) => s.step);
 
   return (
@@ -186,6 +191,7 @@ export function AppShell() {
           {brushRadiusAdjustActive && <BrushRadiusAdjustOverlay />}
           {brushStrengthAdjustActive && <BrushStrengthAdjustOverlay />}
           {sculptRadiusAdjustActive && <SculptRadiusAdjustOverlay />}
+          {sculptStrengthAdjustActive && <SculptStrengthAdjustOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
               when no wizard run is in flight. The reorder/adjust banners
