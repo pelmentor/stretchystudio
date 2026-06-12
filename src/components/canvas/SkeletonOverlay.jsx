@@ -18,6 +18,7 @@ import { useAnimationStore } from '@/store/animationStore';
 import { useParamValuesStore } from '@/store/paramValuesStore';
 import { useRigSpecStore } from '@/store/rigSpecStore';
 import { useSelectionStore } from '@/store/selectionStore';
+import { computeLinkedBoneIds } from '@/lib/pose/selectLinked';
 import { SKELETON_CONNECTIONS } from '@/io/armatureMeta';
 import {
   computeWorldMatrices, mat3Identity,
@@ -239,11 +240,44 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (useEditorStore.getState().editMode === 'pose'
           && useEditorStore.getState().toolMode === 'select') {
         e.currentTarget.releasePointerCapture(e.pointerId);
-        // Phase 4 follow-up — Shift+LMB toggles bone in selection
-        // (Blender's `pose.select_box` / individual-click toggle
-        // behavior in `pose_mode_keymap`). Without Shift the click is
-        // a single-replace. Ctrl/Cmd reserved for future
-        // connected-path-select.
+        // Phase 4 follow-up — modifier-aware bone-click:
+        //   - Ctrl+LMB → linked-pick (select all bones in clicked
+        //     bone's armature, replacing selection). Mirrors Blender's
+        //     `pose.select_linked_pick(extend=False)`.
+        //   - Ctrl+Shift+LMB → linked-pick (extend mode — adds linked
+        //     bones to existing selection without replacing).
+        //   - Shift+LMB → toggle the single clicked bone.
+        //   - bare LMB → single-replace.
+        if (e.ctrlKey || e.metaKey) {
+          const project = useProjectStore.getState().project;
+          const linkedIds = computeLinkedBoneIds(project, [nodeId]);
+          if (linkedIds.size === 0) {
+            // Defensive: clicked node isn't a bone or has no armature.
+            // Fall back to single-replace.
+            selectBoneInBothStores(nodeId, e.shiftKey ? 'toggle' : 'replace');
+            return;
+          }
+          const sel = useSelectionStore.getState();
+          const linkedItems = [...linkedIds].map((id) => ({ type: 'group', id }));
+          if (e.shiftKey) {
+            // Extend mode — add linked items to existing selection.
+            // Filter to avoid duplicates against the current items list.
+            const existingIds = new Set(sel.items.map((it) => it.id));
+            const additions = linkedItems.filter((it) => !existingIds.has(it.id));
+            const finalItems = [...sel.items, ...additions];
+            sel.select(finalItems, 'replace');
+            // Active head goes to the clicked bone (mirrors Blender's
+            // BM_select_history_store on Ctrl+Shift+LMB — clicked
+            // element is always new active even when adding to set).
+            setSelection([nodeId]);
+          } else {
+            // Replace mode — Pose Mode + Ctrl+LMB nukes other selections
+            // and selects only the linked set. Active head = clicked bone.
+            sel.select(linkedItems, 'replace');
+            setSelection([nodeId]);
+          }
+          return;
+        }
         const mode = e.shiftKey ? 'toggle' : 'replace';
         selectBoneInBothStores(nodeId, mode);
         return;
