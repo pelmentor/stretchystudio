@@ -48,11 +48,7 @@ import { frameToMs, msToFrame } from '@/lib/timeMath';
 import { toast } from '@/hooks/use-toast';
 import { useModalVertexTransformStore } from '@/store/modalVertexTransformStore';
 import { useModalTransformStore } from '@/store/modalTransformStore';
-import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
-import { useBrushRadiusAdjustStore } from '@/store/brushRadiusAdjustStore';
-import { useBrushStrengthAdjustStore } from '@/store/brushStrengthAdjustStore';
-import { useSculptRadiusAdjustStore } from '@/store/sculptRadiusAdjustStore';
-import { useSculptStrengthAdjustStore } from '@/store/sculptStrengthAdjustStore';
+import { useScalarModalStore } from '@/store/scalarModalStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -224,10 +220,12 @@ export default function CanvasViewport({
   const brushCircleRef = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
   const propEditCircleRef = useRef(null); // GAP-015 — proportional-edit influence ring
   // Phase 2.C (2026-06-12) — F-radius-adjust modal state hoisted to
-  // `radiusAdjustStore`; the modal-tool overlay `RadiusAdjustOverlay`
-  // owns F / Esc / wheel / mousedown / mousemove window-level events
-  // while active. CanvasViewport keeps only the propEdit ring rendering
-  // (reads `useRadiusAdjustStore` for the anchor + active flag).
+  // the modal-tool framework. Originally 5 parallel single-purpose
+  // stores (radiusAdjustStore + 4 sisters), folded into a single
+  // `scalarModalStore` with a target-discriminator registry per
+  // RULE №2. CanvasViewport keeps only the propEdit ring rendering
+  // — reads `useScalarModalStore` for the anchor + active flag
+  // (gated on target === 'proportionalEditRadius').
   // Latest pointer position over the canvas, refreshed on every move so
   // F-press can snapshot it as the radius-adjust anchor. Lives outside
   // React to avoid re-rendering on mouse movement.
@@ -1917,9 +1915,9 @@ export default function CanvasViewport({
         // modal was unreachable dead code. Phase 2.C closes that gap by
         // using the actual `editMode === 'edit'` value.
         if (editorRef.current.editMode !== 'edit') return;
-        if (useRadiusAdjustStore.getState().active) return;
+        if (useScalarModalStore.getState().active) return;
         e.preventDefault();
-        useRadiusAdjustStore.getState().begin(prefs.proportionalEdit.radius);
+        useScalarModalStore.getState().begin('proportionalEditRadius', prefs.proportionalEdit.radius);
         isDirtyRef.current = true;
       }
     };
@@ -1955,16 +1953,16 @@ export default function CanvasViewport({
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'f' && e.key !== 'F') return;
       if (e.shiftKey) {
-        if (useBrushStrengthAdjustStore.getState().active) return;
+        if (useScalarModalStore.getState().active) return;
         e.preventDefault();
-        useBrushStrengthAdjustStore.getState().begin(
-          useEditorStore.getState().brushStrength,
+        useScalarModalStore.getState().begin(
+          'brushStrength', useEditorStore.getState().brushStrength,
         );
       } else {
-        if (useBrushRadiusAdjustStore.getState().active) return;
+        if (useScalarModalStore.getState().active) return;
         e.preventDefault();
-        useBrushRadiusAdjustStore.getState().begin(
-          useEditorStore.getState().brushSize,
+        useScalarModalStore.getState().begin(
+          'brushSize', useEditorStore.getState().brushSize,
         );
       }
       isDirtyRef.current = true;
@@ -1996,16 +1994,16 @@ export default function CanvasViewport({
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'f' && e.key !== 'F') return;
       if (e.shiftKey) {
-        if (useSculptStrengthAdjustStore.getState().active) return;
+        if (useScalarModalStore.getState().active) return;
         e.preventDefault();
-        useSculptStrengthAdjustStore.getState().begin(
-          useEditorStore.getState().sculpt?.strength ?? 0.5,
+        useScalarModalStore.getState().begin(
+          'sculptStrength', useEditorStore.getState().sculpt?.strength ?? 0.5,
         );
       } else {
-        if (useSculptRadiusAdjustStore.getState().active) return;
+        if (useScalarModalStore.getState().active) return;
         e.preventDefault();
-        useSculptRadiusAdjustStore.getState().begin(
-          useEditorStore.getState().sculpt?.size ?? 80,
+        useScalarModalStore.getState().begin(
+          'sculptSize', useEditorStore.getState().sculpt?.size ?? 80,
         );
       }
       isDirtyRef.current = true;
@@ -2966,7 +2964,7 @@ export default function CanvasViewport({
     // pointerdown for the same gesture. So we still need to bail when
     // the radius modal is active, mirroring the modal-G/R/S bail check
     // a few lines above.
-    if (useRadiusAdjustStore.getState().active) {
+    if (useScalarModalStore.getState().active) {
       return;
     }
 
@@ -3776,12 +3774,16 @@ export default function CanvasViewport({
     lastCursorRef.current.clientY = e.clientY;
 
     // Phase 2.C — F-radius modal cursor-distance gesture moved to
-    // RadiusAdjustOverlay. The overlay's mousemove handler runs at
-    // window-capture; since it returns RUNNING_MODAL the dispatcher
-    // calls stopPropagation, but pointermove is a separate event
-    // stream from mousemove and still flows to this React handler.
-    // We only need to read the store for the ring rendering below.
-    const radiusMode = useRadiusAdjustStore.getState();
+    // ScalarModalOverlay (target='proportionalEditRadius'). The
+    // overlay's mousemove handler runs at window-capture; since it
+    // returns RUNNING_MODAL the dispatcher calls stopPropagation,
+    // but pointermove is a separate event stream from mousemove and
+    // still flows to this React handler. We only need to read the
+    // store for the ring rendering below — gate on target to
+    // distinguish prop-edit from brush radius/strength.
+    const radiusMode = useScalarModalStore.getState();
+    const radiusModeActive = radiusMode.active
+      && radiusMode.target === 'proportionalEditRadius';
 
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
@@ -3792,7 +3794,7 @@ export default function CanvasViewport({
       // previously the ring showed across the entire Default workspace,
       // including the reorder/adjust wizard steps where it was confusing.
       const inMeshEdit = editorRef.current.editMode === 'edit';
-      const showRing = inMeshEdit && (peCfg?.enabled || radiusMode.active);
+      const showRing = inMeshEdit && (peCfg?.enabled || radiusModeActive);
       if (showRing) {
         const rect = canvas.getBoundingClientRect();
         const screenR = peCfg.radius * editorRef.current.viewByMode[modeKey].zoom;
@@ -3801,11 +3803,11 @@ export default function CanvasViewport({
         // user "draws" the radius). Outside F-mode the ring follows the
         // cursor as before, since proportional-edit's normal preview is
         // a brush-like indicator at the active vertex location.
-        const ringX = (radiusMode.active && radiusMode.anchorClient
+        const ringX = (radiusModeActive && radiusMode.anchorClient
                        && typeof radiusMode.anchorClient.x === 'number')
           ? radiusMode.anchorClient.x - rect.left
           : e.clientX - rect.left;
-        const ringY = (radiusMode.active && radiusMode.anchorClient
+        const ringY = (radiusModeActive && radiusMode.anchorClient
                        && typeof radiusMode.anchorClient.y === 'number')
           ? radiusMode.anchorClient.y - rect.top
           : e.clientY - rect.top;
