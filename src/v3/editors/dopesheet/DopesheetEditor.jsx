@@ -217,19 +217,65 @@ export function DopesheetEditor() {
   const hoverRef = useRef(false);
   const rowsRefForA = useRef([]);
   useEffect(() => {
-    const onKeyA = (e) => {
+    const onKey = (e) => {
       if (!hoverRef.current) return;
-      if (e.code !== 'KeyA') return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.code !== 'KeyA' && e.code !== 'KeyI') return;
       const t = /** @type {HTMLElement|null} */ (e.target);
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      // Phase 4 paint-fidelity follow-up — Dopesheet sidebar grows the
+      // full Blender select-all trio (bare A, Alt+A, Ctrl+I) matching
+      // FCurveEditor's `resolveSelectAllAction` resolver behavior.
+      // Pre-fix only bare A was wired; Alt+A and Ctrl+I silently no-op'd.
+      //
+      //   - bare A    → toggle: any selected → clear; else select all visible
+      //   - Alt+A     → clear unconditionally (Blender pose.select_all DESELECT)
+      //   - Ctrl+I    → invert (selected ↔ unselected per row)
+      //
+      // Modifier discipline: bare A rejects modifiers; Alt+A requires
+      // ONLY alt; Ctrl+I requires ONLY ctrl/meta. Other modifier combos
+      // pass through (they may be bound to other chords like Ctrl+A for
+      // the industry_compatible preset's select-add, which Dopesheet
+      // doesn't implement yet — flagged for future audit).
+      const isBareA = e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+      const isAltA = e.code === 'KeyA' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+      const isCtrlI = e.code === 'KeyI' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+      if (!isBareA && !isAltA && !isCtrlI) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
       const liveRows = rowsRefForA.current;
       if (!liveRows || liveRows.length === 0) return;
+      if (isAltA) {
+        // Clear unconditionally. If already empty, the setter sees no
+        // change and skips a re-render.
+        setKeyformSelectionHandles((prev) => {
+          for (const inner of prev.values()) {
+            if (inner && inner.size > 0) return new Map();
+          }
+          return prev;
+        });
+        return;
+      }
+      if (isCtrlI) {
+        setKeyformSelectionHandles((prev) => {
+          const next = new Map();
+          for (const row of liveRows) {
+            if (!row?.fcurveId || !Array.isArray(row.keyforms)) continue;
+            const cur = prev.get(row.fcurveId);
+            const inner = new Map();
+            for (let i = 0; i < row.keyforms.length; i++) {
+              if (!cur || !cur.has(i)) {
+                inner.set(i, { center: true, left: true, right: true });
+              }
+            }
+            if (inner.size > 0) next.set(row.fcurveId, inner);
+          }
+          return next;
+        });
+        return;
+      }
+      // isBareA — toggle: any selected → clear; else select-all-visible.
       setKeyformSelectionHandles((prev) => {
-        // Toggle: any selected → clear; else select-all-visible.
         let anySelected = false;
         for (const inner of prev.values()) {
           if (inner && inner.size > 0) { anySelected = true; break; }
@@ -247,8 +293,8 @@ export function DopesheetEditor() {
         return next;
       });
     };
-    window.addEventListener('keydown', onKeyA, { capture: true });
-    return () => window.removeEventListener('keydown', onKeyA, { capture: true });
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
   }, [setKeyformSelectionHandles]);
   // Keep the handler's row snapshot fresh.
   rowsRefForA.current = rows;
