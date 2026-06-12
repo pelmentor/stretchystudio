@@ -2014,6 +2014,57 @@ export default function CanvasViewport({
     return () => window.removeEventListener('keydown', handler);
   }, [previewMode]);
 
+  /* ── Escape — cancel sculpt stroke (Blender PAINT_OT_*_paint Esc) ────── */
+  //
+  // Sister to the WeightPaintOverlay Escape handler (af3cf1d). Sculpt
+  // stroke commit pattern was refactored to beginBatch/endBatch in the
+  // companion commit so this path can call `discardBatch` against the
+  // pre-stroke snapshot pushed at pointerdown.
+  //
+  // Difference from Weight Paint: sculpt mutates `mesh.vertices` in
+  // place AND uploads positions to GL per tick. `discardBatch` restores
+  // the project state but the GL buffer still holds the last-tick
+  // verts — must explicitly re-upload `drag.origVerts` (the snapshot
+  // captured at stroke begin) so the visual reverts.
+  useEffect(() => {
+    if (previewMode) return;
+    const handler = (e) => {
+      if (e.key !== 'Escape') return;
+      const drag = dragRef.current;
+      if (!drag || drag.mode !== 'sculpt') return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Roll back the project undo batch — pops the pre-stroke
+      // snapshot, restores via updateProject({skipHistory:true}) so
+      // the restore itself doesn't push another snapshot.
+      if (drag.batched) {
+        discardBatch((snapshot) => {
+          if (!snapshot) return;
+          useProjectStore.getState().updateProject((proj) => {
+            Object.assign(proj, snapshot);
+          }, { skipHistory: true });
+        });
+      }
+      // Re-upload the start-of-stroke vertex positions to GL so the
+      // visual mesh matches the rolled-back project. Without this the
+      // GL buffer carries the last per-tick upload, the heatmap is
+      // stale until the next render-loop dirty signal arrives.
+      const scene = sceneRef.current;
+      if (scene && scene.parts && drag.origVerts && drag.allUvs) {
+        scene.parts.uploadPositions(drag.partId, drag.origVerts, drag.allUvs);
+        if (typeof scene._markDirty === 'function') scene._markDirty();
+      }
+      // Clear dragRef so the held LMB's eventual pointerup hits the
+      // null-drag early-return — without this the pointerup would try
+      // to endBatch a now-discarded batch and crash the depth counter.
+      dragRef.current = null;
+      if (canvasRef.current) canvasRef.current.style.cursor = '';
+      isDirtyRef.current = true;
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewMode]);
+
   /* ── K key — insert keyframes for selected nodes at current time ─────── */
   useEffect(() => {
     // GAP-010 — see brush-shortcut effect above. Same reasoning.
