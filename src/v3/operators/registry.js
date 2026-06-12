@@ -18,7 +18,7 @@
  * @module v3/operators/registry
  */
 
-import { useUIV3Store } from '../../store/uiV3Store.js';
+import { useUIV3Store, getEditorMode } from '../../store/uiV3Store.js';
 import { useProjectStore } from '../../store/projectStore.js';
 import { useSelectionStore } from '../../store/selectionStore.js';
 import { useEditorStore } from '../../store/editorStore.js';
@@ -1935,15 +1935,19 @@ function registerBuiltins() {
     id: 'apply.poseAsRest',
     label: 'Apply Pose As Rest',
     available: () => {
-      // Audit fix G-2 — animation mode guard. Pre-fix the legacy UI
-      // button at CanvasViewport.jsx:3531-3534 had this check; the Phase
-      // 6 operator did not. `Ctrl+A` at a non-zero scrubber position
-      // bakes the motion3.json-offset pose into rest, corrupting rest
-      // positions permanently — and combined with G-6 (no undo path),
-      // this was a silent data-loss vector reachable from the default
-      // keymap. Refuse the op when an animation is being scrubbed.
-      const editor = useEditorStore.getState();
-      if (editor.editMode === 'animation') return false;
+      // Animation mode guard. The legacy UI button (ViewportHeader.jsx:233,
+      // formerly CanvasViewport.jsx:3531) reads `editorMode` from
+      // `useUIV3Store(selectEditorMode)`, which IS 'animation' when the
+      // Animation workspace is active. The Phase 6 G-2 audit-fix intended
+      // to copy that guard onto the operator but wrote
+      // `useEditorStore.getState().editMode === 'animation'` — that store's
+      // `editMode` slot is `'edit'` / `'pose'` / `'sculpt'` / `'weightPaint'`,
+      // NEVER `'animation'` (animation is a workspace concept on uiV3Store,
+      // not an editor mode on editorStore). So the guard was always-false
+      // and the silent data-loss vector remained open from the default
+      // keymap. Fixed 2026-06-12 to read the workspace-derived editorMode
+      // via `getEditorMode()`.
+      if (getEditorMode() === 'animation') return false;
       // Available iff there's at least one bone in the project (so the
       // op has something to bake). Same check the existing UI button uses.
       const project = useProjectStore.getState().project;
