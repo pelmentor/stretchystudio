@@ -49,6 +49,7 @@ import { useCircleSelectStore } from '../../store/circleSelectStore.js';
 import { useRadiusAdjustStore } from '../../store/radiusAdjustStore.js';
 import { useBrushRadiusAdjustStore } from '../../store/brushRadiusAdjustStore.js';
 import { useBrushStrengthAdjustStore } from '../../store/brushStrengthAdjustStore.js';
+import { useSculptRadiusAdjustStore } from '../../store/sculptRadiusAdjustStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 import { ModalToolInputDispatcher } from '../modalTool/index.js';
@@ -85,6 +86,9 @@ const BrushRadiusAdjustOverlay = lazy(() =>
 );
 const BrushStrengthAdjustOverlay = lazy(() =>
   import('./BrushStrengthAdjustOverlay.jsx').then((m) => ({ default: m.BrushStrengthAdjustOverlay }))
+);
+const SculptRadiusAdjustOverlay = lazy(() =>
+  import('./SculptRadiusAdjustOverlay.jsx').then((m) => ({ default: m.SculptRadiusAdjustOverlay }))
 );
 const MergeMenu = lazy(() =>
   import('./MergeMenu.jsx').then((m) => ({ default: m.MergeMenu }))
@@ -141,6 +145,7 @@ export function AppShell() {
   const radiusAdjustActive = useRadiusAdjustStore((s) => s.active);
   const brushRadiusAdjustActive = useBrushRadiusAdjustStore((s) => s.active);
   const brushStrengthAdjustActive = useBrushStrengthAdjustStore((s) => s.active);
+  const sculptRadiusAdjustActive = useSculptRadiusAdjustStore((s) => s.active);
   const wizardStep = useWizardStore((s) => s.step);
 
   return (
@@ -180,6 +185,7 @@ export function AppShell() {
           {radiusAdjustActive && <RadiusAdjustOverlay />}
           {brushRadiusAdjustActive && <BrushRadiusAdjustOverlay />}
           {brushStrengthAdjustActive && <BrushStrengthAdjustOverlay />}
+          {sculptRadiusAdjustActive && <SculptRadiusAdjustOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
               when no wizard run is in flight. The reorder/adjust banners

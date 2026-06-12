@@ -50,6 +50,7 @@ import { useModalTransformStore } from '@/store/modalTransformStore';
 import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
 import { useBrushRadiusAdjustStore } from '@/store/brushRadiusAdjustStore';
 import { useBrushStrengthAdjustStore } from '@/store/brushStrengthAdjustStore';
+import { useSculptRadiusAdjustStore } from '@/store/sculptRadiusAdjustStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1964,6 +1965,34 @@ export default function CanvasViewport({
           useEditorStore.getState().brushSize,
         );
       }
+      isDirtyRef.current = true;
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewMode]);
+
+  /* ── F — Sculpt brush-radius modal ───────────────────────────────────── */
+  //
+  // Mirrors Blender's `WM_OT_radial_control` for sculpt brushes — same
+  // gesture as Weight Paint's F (sister code immediately above), but
+  // writes to `editorStore.sculpt.size` instead of `brushSize`.
+  // Sculpt's own brush size is independent per editorStore.js:214-216:
+  // "the user's Edit-Mode brush size is preserved when they Tab into
+  // Sculpt and back".
+  //
+  // Sculpt Shift+F (strength) ships in the follow-up commit; both bind
+  // here in the same handler once the strength modal exists.
+  useEffect(() => {
+    if (previewMode) return;
+    const handler = (e) => {
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
+      if (editorRef.current.editMode !== 'sculpt') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      if (useSculptRadiusAdjustStore.getState().active) return;
+      e.preventDefault();
+      const startSize = useEditorStore.getState().sculpt?.size ?? 80;
+      useSculptRadiusAdjustStore.getState().begin(startSize);
       isDirtyRef.current = true;
     };
     window.addEventListener('keydown', handler);
