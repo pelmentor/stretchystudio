@@ -338,6 +338,11 @@ import {
   remapSelection,
 } from '../../../anim/graphEditOps.js';
 import { recalcKeyformHandles } from '../../../anim/fcurveHandles.js';
+import {
+  applyDuplicateKeyforms,
+  wouldDelDupChange,
+} from '../../../anim/dopesheetDelDup.js';
+import { remapHandlesAfterTranslate } from '../../../anim/dopesheetGrab.js';
 import { fcurveColorCss } from '../../../anim/fcurveColor.js';
 import { hasDriver, clearDriver } from '../../../anim/driverGate.js';
 import { evaluateDriver } from '../../../anim/driver.js';
@@ -2630,6 +2635,44 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     if (e.code === 'KeyB') {
       consume();
       startBoxSelect(anchor);
+      return;
+    }
+    // Phase 4 paint-fidelity follow-up — Shift+D duplicate-and-grab.
+    // Sister to DopesheetEditor's Shift+D handler (DopesheetEditor.jsx:825):
+    // duplicate selected center keyforms in-place, retarget selection
+    // at the duplicates, then auto-enter the standard G modal so the
+    // user can drop the duplicates with a single drag (Blender's
+    // ACTION_OT_duplicate_move / GRAPH_OT_duplicate_move macro shape).
+    //
+    // The shared `applyDuplicateKeyforms` + `remapHandlesAfterTranslate`
+    // utilities work identically for FCurve and Dopesheet because both
+    // editors share the keyform-selection store. The only divergence
+    // is FCurve's `startModal('g', anchor)` (two-axis G) vs Dopesheet's
+    // `enterGrabModal()` (time-only G).
+    if (e.code === 'KeyD' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      consume();
+      const curHandles = selectionRef.current;
+      if (!wouldDelDupChange(curHandles)) return;
+      /** @type {import('../../../anim/dopesheetGrab.js').TranslateRemaps | null} */
+      let capturedRemaps = null;
+      let capturedChanged = false;
+      update((project) => {
+        const targetAction = project.actions.find((a) => a.id === activeActionId);
+        if (!targetAction) return;
+        const r = applyDuplicateKeyforms(targetAction, curHandles);
+        capturedRemaps = r.remaps;
+        capturedChanged = r.changed;
+      });
+      if (capturedChanged && capturedRemaps) {
+        const remapped = remapHandlesAfterTranslate(curHandles, capturedRemaps);
+        setSelectedHandles(remapped);
+        // selectionRef updates via the useEffect at line 722, but that's
+        // post-render; startModal reads selectionRef.current synchronously.
+        // Manual write keeps the modal pre-targeted at the duplicates
+        // without waiting for the React state-sync cycle.
+        selectionRef.current = remapped;
+        startModal('g', anchor);
+      }
       return;
     }
     if (e.code === 'KeyV') {
