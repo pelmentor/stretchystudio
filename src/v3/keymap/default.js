@@ -74,6 +74,25 @@ export const DEFAULT_KEYMAP = {
   // editor (the dispatcher skips editable targets).
   'Space': 'anim.play',
 
+  // Phase 4 follow-up — Blender's space_time / space_action /
+  // space_graph arrow-key chords for frame scrubbing:
+  //   - LeftArrow / RightArrow → ±1 frame
+  //   - Shift+LeftArrow / Shift+RightArrow → jump to action's
+  //     start / end frame (Blender binds Shift+Arrow to "jump to
+  //     prev/next keyframe" by default, but SS doesn't have a
+  //     selected-keyframe context yet at the timeline-editor level;
+  //     start/end is the more universal target and matches Blender's
+  //     Ctrl+Home / Ctrl+End).
+  //
+  // Operators gate on `hoveredEditorType() ∈ {timeline, dopesheet,
+  // fcurve}` so arrow keys in other editors stay free for their
+  // usual UI roles. The dispatcher's editable-target check (input /
+  // textarea) is the second guard layer.
+  'ArrowLeft':        'time.stepFrame.backward',
+  'ArrowRight':       'time.stepFrame.forward',
+  'Shift+ArrowLeft':  'time.jumpToStart',
+  'Shift+ArrowRight': 'time.jumpToEnd',
+
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 

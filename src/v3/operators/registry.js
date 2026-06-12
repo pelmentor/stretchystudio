@@ -744,6 +744,81 @@ function registerBuiltins() {
     },
   });
 
+  // Phase 4 paint-fidelity follow-up — Timeline arrow-key frame step.
+  // Blender's space_time / space_action / space_graph keymaps bind
+  // LeftArrow / RightArrow to ±1 frame; Shift+LeftArrow /
+  // Shift+RightArrow to start/end. SS pre-fix had no arrow-key
+  // bindings — scrubbing required dragging the playhead or pressing
+  // Space to play.
+  //
+  // Gated to fire only when hovering an animation editor (timeline /
+  // dopesheet / fcurve) — arrow keys in other editors stay free for
+  // their usual UI roles (focus navigation, scroll, etc.).
+  //
+  // currentTime is canonical (ms); frame is derived
+  // (Math.round(t * fps / 1000)). seekFrame(n) writes the frame back
+  // through animationStore so the playhead + drivers + auto-key all
+  // see the change.
+  function animationHoverGate() {
+    const t = hoveredEditorType();
+    return t === 'timeline' || t === 'dopesheet' || t === 'fcurve';
+  }
+
+  registerOperator({
+    id: 'time.stepFrame.forward',
+    label: 'Next Frame',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const fps = anim.fps || 30;
+      const curFrame = Math.round((anim.currentTime ?? 0) * fps / 1000);
+      const endFrame = Number.isFinite(anim.endFrame) ? anim.endFrame : (curFrame + 1);
+      const next = Math.min(endFrame, curFrame + 1);
+      if (next === curFrame) return;
+      anim.seekFrame(next);
+    },
+  });
+
+  registerOperator({
+    id: 'time.stepFrame.backward',
+    label: 'Previous Frame',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const fps = anim.fps || 30;
+      const curFrame = Math.round((anim.currentTime ?? 0) * fps / 1000);
+      const startFrame = Number.isFinite(anim.startFrame) ? anim.startFrame : 0;
+      const next = Math.max(startFrame, curFrame - 1);
+      if (next === curFrame) return;
+      anim.seekFrame(next);
+    },
+  });
+
+  registerOperator({
+    id: 'time.jumpToStart',
+    label: 'Jump to Start',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const startFrame = Number.isFinite(anim.startFrame) ? anim.startFrame : 0;
+      anim.seekFrame(startFrame);
+    },
+  });
+
+  registerOperator({
+    id: 'time.jumpToEnd',
+    label: 'Jump to End',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const fps = anim.fps || 30;
+      const endFrame = Number.isFinite(anim.endFrame)
+        ? anim.endFrame
+        : Math.round((anim.currentTime ?? 0) * fps / 1000);
+      anim.seekFrame(endFrame);
+    },
+  });
+
   // file.new — opens the New Project template picker (mounts in
   // Topbar.jsx, gated by `newProjectDialogStore.open`). The dialog
   // owns reset + template-apply + dirty-warning UX. The chord
