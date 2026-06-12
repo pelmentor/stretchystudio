@@ -51,7 +51,7 @@
 import { memo, useEffect, useMemo, useRef } from 'react';
 import { useEditorStore } from '../../../../store/editorStore.js';
 import { useProjectStore } from '../../../../store/projectStore.js';
-import { beginBatch, endBatch } from '../../../../store/undoHistory.js';
+import { beginBatch, endBatch, discardBatch } from '../../../../store/undoHistory.js';
 import { getMesh } from '../../../../store/objectDataAccess.js';
 import { computeBlurUpdates } from '../../../../lib/weightPaint/index.js';
 import { buildVertexAdjacency } from '../../../../lib/proportionalEdit.js';
@@ -144,6 +144,60 @@ export function WeightPaintOverlay() {
         rafIdRef.current = null;
       }
     };
+  }, []);
+
+  // Escape-cancel-stroke (Blender PAINT_OT_*_paint Esc semantic).
+  //
+  // Pre-fix: pressing Escape mid-stroke fell through to the global
+  // `selection.clear` operator which did nothing useful (no selection
+  // to clear in Weight Paint), and the stroke kept running until the
+  // user released LMB → endBatch committed the partial stroke to undo.
+  //
+  // Post-fix: if a stroke is in flight (`dragRef.current` non-null),
+  // Escape rolls back the entire stroke via `discardBatch` + reset
+  // project from the pre-stroke snapshot with `skipHistory:true`. The
+  // SVG keeps pointer capture (browser releases automatically on the
+  // subsequent pointerup); the cleared dragRef makes handlePointerUp /
+  // handlePointerMove early-return so the stale LMB-held drag becomes
+  // an inert no-op until the user releases.
+  //
+  // Single source of truth — the discardBatch path is the same one
+  // ModalVertexTransformOverlay uses for extrude+drag rollbackOnCancel
+  // (see its docblock for the established pattern).
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key !== 'Escape') return;
+      const drag = dragRef.current;
+      if (!drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Cancel any pending paint dab and clear the rAF queue.
+      if (rafIdRef.current != null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      pendingPaintRef.current = null;
+      // Roll back via discardBatch — pops the pre-stroke snapshot,
+      // restores it without pushing to redo. updateProject runs with
+      // skipHistory:true so the restore itself doesn't push a snapshot
+      // (the discardBatch already handled history bookkeeping).
+      if (drag.batched) {
+        discardBatch((snapshot) => {
+          if (!snapshot) return;
+          useProjectStore.getState().updateProject((proj) => {
+            Object.assign(proj, snapshot);
+          }, { skipHistory: true });
+        });
+      }
+      // Clear dragRef so the still-held LMB's pointerup hits the
+      // early-return in handlePointerUp instead of calling endBatch
+      // (which would commit a now-empty batch and crash the depth
+      // counter). The browser releases pointer capture automatically
+      // on pointerup, so no explicit releasePointerCapture needed.
+      dragRef.current = null;
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, []);
 
   // Reset per-stroke caches when the active part / its mesh topology
