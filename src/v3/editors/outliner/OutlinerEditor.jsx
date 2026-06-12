@@ -341,6 +341,45 @@ export function OutlinerEditor() {
         useEditorStore.getState().setSelection(activeHead ? [activeHead] : []);
         return;
       }
+      // Phase 4 paint-fidelity follow-up — Outliner Ctrl+I invert
+      // selection of visible rows. Sister to A/Alt+A (581640f) — same
+      // row-walk + type conversion + active-head policy. The global
+      // `selection.invert` operator scopes to Edit (verts) / Pose
+      // (bones) / Object (parts) — same shape as `selectAllToggle`;
+      // Outliner needs its own scope for the same reason (the global
+      // Object-mode branch only inverts visible parts, missing
+      // deformers/lattice-objects/bones-in-Object-mode).
+      if (e.code === 'KeyI' && (e.ctrlKey || e.metaKey)
+          && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const sel = useSelectionStore.getState();
+        const selectedIds_ = new Set(sel.items.map((it) => it.id));
+        /** @type {Array<{type: string, id: string}>} */
+        const next = [];
+        for (const { node } of rows) {
+          if (/** @type {any} */ (node).isSynthetic === true) continue;
+          if (selectedIds_.has(node.id)) continue;
+          const t = /** @type {any} */ (node).type;
+          let storeType;
+          if (t === 'part' || t === 'artmesh') storeType = 'part';
+          else if (t === 'group') storeType = 'group';
+          else if (t === 'deformer') storeType = 'deformer';
+          else if (t === 'object') storeType = 'object';
+          else continue;
+          next.push({ type: storeType, id: node.id });
+        }
+        sel.select(next, 'replace');
+        let activeHead = null;
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].type === 'part' || next[i].type === 'group') {
+            activeHead = next[i].id;
+            break;
+          }
+        }
+        useEditorStore.getState().setSelection(activeHead ? [activeHead] : []);
+        return;
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         const next = rows[Math.min(idx < 0 ? 0 : idx + 1, rows.length - 1)]?.node;
