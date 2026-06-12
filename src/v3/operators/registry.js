@@ -692,7 +692,18 @@ function registerBuiltins() {
         ?? findLastFrameTarget(items);
       if (!target) return;
       const project = useProjectStore.getState().project;
-      const bbox = computeNodeBbox(project, target.id);
+      let bbox = computeNodeBbox(project, target.id);
+      if (!bbox) {
+        // Phase 4 paint-fidelity follow-up — fall back to bone-position
+        // bbox for bone groups. computeNodeBbox returns null for bones
+        // because they have no descendant parts (bones deform parts
+        // elsewhere in the tree via skinning, not parent-child). Pre-fix
+        // pressing Numpad . / Period over a selected bone was a silent
+        // no-op — Blender's `view3d.view_selected` frames on the bone
+        // head/tail. SS port: small bbox centered on the bone's world
+        // pivot (the joint position rendered by SkeletonOverlay).
+        bbox = computeBoneBbox(project, target.id);
+      }
       if (!bbox) return;
 
       // canvas dimensions: query the DOM rather than thread a viewport
@@ -2987,6 +2998,38 @@ function computeNodeBbox(project, nodeId) {
 
   if (bbox.minX === Infinity) return null;
   return bbox;
+}
+
+/**
+ * Compute a small bbox centered on the bone's world pivot position.
+ * Used as a fallback for `view.frameSelected` when the selected node
+ * is a bone (group with boneRole) — computeNodeBbox walks descendant
+ * parts and returns null because bones deform parts elsewhere in the
+ * tree via skinning, not parent-child.
+ *
+ * Padding is in mesh-units; choice of 80 mirrors SkeletonOverlay's
+ * JOINT_RADIUS_EDIT (joint dot size at zoom=1) scaled to give a
+ * comfortable framing — bone takes ~10% of canvas at the resulting
+ * zoom.
+ *
+ * @param {any} project
+ * @param {string} nodeId
+ * @returns {{minX:number, minY:number, maxX:number, maxY:number}|null}
+ */
+function computeBoneBbox(project, nodeId) {
+  const node = project?.nodes?.find((n) => n.id === nodeId);
+  if (!node || !isBoneGroupNode(node)) return null;
+  const worldMatrices = computeWorldMatrices(project.nodes);
+  const wm = worldMatrices.get(nodeId);
+  if (!wm) return null;
+  // Apply local origin (0, 0) through the world matrix → translation
+  // column (wm[6], wm[7]). For column-major 3×3 stored as Float32Array(9),
+  // indices 6 and 7 are tx and ty.
+  const cx = wm[6];
+  const cy = wm[7];
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  const r = 80;
+  return { minX: cx - r, minY: cy - r, maxX: cx + r, maxY: cy + r };
 }
 
 /** findLast polyfill for environments without Array.prototype.findLast. */
