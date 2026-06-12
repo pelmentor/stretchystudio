@@ -280,6 +280,67 @@ export function OutlinerEditor() {
       if (rows.length === 0) return;
       const idx = rows.findIndex((r) => r.node.id === activeId);
       const cur = rows[idx]?.node;
+      // Phase 4 paint-fidelity follow-up — Outliner A / Alt+A.
+      // Mirrors Blender's `outliner.select_all` (`reference/blender/
+      // source/blender/editors/space_outliner/outliner_select.cc:1814+`)
+      // — A toggles select-all of visible rows, Alt+A deselects all.
+      // Pre-fix the global `selection.selectAllToggle` operator scoped
+      // to mode (Edit → vertices, Pose → bones, Object → parts). The
+      // mode-Object branch only selected visible PARTS — the Outliner
+      // also shows groups, bones, deformers, lattice objects — A in
+      // Outliner missed those by design. Now A in the focused tree
+      // selects every visible row's node, regardless of type, by
+      // converting each tree node to its selectionStore type via the
+      // same mapping `onSelect` uses for single-row clicks.
+      //
+      // stopPropagation prevents the global op from also firing.
+      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.altKey) {
+          // Alt+A → deselect all
+          useSelectionStore.getState().clear();
+          useEditorStore.getState().setSelection([]);
+          return;
+        }
+        // Bare A → toggle: any selection → clear; else select all rows.
+        const sel = useSelectionStore.getState();
+        if (sel.items.length > 0) {
+          sel.clear();
+          useEditorStore.getState().setSelection([]);
+          return;
+        }
+        /** @type {Array<{type: string, id: string}>} */
+        const items = [];
+        for (const { node } of rows) {
+          // Skip synthetic (e.g. armature root placeholder) — they have
+          // no backing project node to select against.
+          if (/** @type {any} */ (node).isSynthetic === true) continue;
+          const t = /** @type {any} */ (node).type;
+          let storeType;
+          if (t === 'part' || t === 'artmesh') storeType = 'part';
+          else if (t === 'group') storeType = 'group';
+          else if (t === 'deformer') storeType = 'deformer';
+          else if (t === 'object') storeType = 'object';
+          else continue;
+          items.push({ type: storeType, id: node.id });
+        }
+        if (items.length === 0) return;
+        sel.select(items, 'replace');
+        // Legacy editorStore.selection mirrors part/group only (deformer
+        // and object are universal-store-only). Walk reverse for the
+        // last part/group as active head; matches the Object Mode A
+        // convention in `selection.selectAllToggle`.
+        let activeHead = null;
+        for (let i = items.length - 1; i >= 0; i--) {
+          if (items[i].type === 'part' || items[i].type === 'group') {
+            activeHead = items[i].id;
+            break;
+          }
+        }
+        useEditorStore.getState().setSelection(activeHead ? [activeHead] : []);
+        return;
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         const next = rows[Math.min(idx < 0 ? 0 : idx + 1, rows.length - 1)]?.node;
