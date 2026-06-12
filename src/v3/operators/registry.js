@@ -2032,10 +2032,24 @@ function registerBuiltins() {
   // selection. Mirrors Blender's `VIEW3D_OT_select_circle` (default
   // keymap: `C` chord). The overlay (`CircleSelectOverlay`) owns the
   // mouse + key lifecycle from here; this op just seeds the modal.
+  //
+  // 2026-06-12 — same hoveredEditorType() gate as selection.boxSelect.
+  // Pre-fix `available: () => true` let C-key bleed through to non-
+  // viewport editors (Timeline / Dopesheet / FCurve / Parameters /
+  // Outliner). Pressing C over the Dopesheet would engage circle-select
+  // on the WRONG canvas and trap input until cancelled — same class as
+  // the B-key bleed bug that was fixed earlier. Missed in the original
+  // hover-gate sweep because boxSelect had a user-visible repro and
+  // circleSelect didn't (C is less-used and the bug was silent).
   registerOperator({
     id: 'selection.circleSelect',
     label: 'Circle Select (C)',
-    available: () => true,
+    available: () => {
+      const t = hoveredEditorType();
+      // Null = unannotated area (popovers, app shell margins) — allow
+      // through, mirrors box-select's null-allow behavior.
+      return t === null || t === 'viewport';
+    },
     exec: () => {
       const editor = useEditorStore.getState();
       const isEditModeOnPart = editor.editMode === 'edit'

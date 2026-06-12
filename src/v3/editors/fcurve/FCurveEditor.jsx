@@ -2597,41 +2597,55 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       || e.target instanceof HTMLSelectElement
     ) return;
 
+    // FCurve owns this chord — stopPropagation prevents the global
+    // operator dispatcher (registered as a bubble-phase window listener
+    // in mountOperatorDispatcher) from ALSO firing on the same key.
+    // Pre-2026-06-12 every branch below only called preventDefault, so
+    // pressing G over the FCurve editor (which is a tabIndex=0 div that
+    // grabs focus on pointerEnter) would start FCurve's keyframe-grab
+    // modal AND the global transform.translate modal in lockstep. Same
+    // bug class as the dopesheet G fix (DopesheetEditor.jsx:736 — "B-3
+    // (R4) — also stopPropagation so the global keymap dispatcher
+    // doesn't ALSO fire transform.translate on the same chord").
+    // Implemented as a `consume(e)` helper so every branch claims with
+    // a one-line call instead of duplicating preventDefault + stopProp.
+    const consume = () => { e.preventDefault(); e.stopPropagation(); };
+
     const rect = canvasRef.current?.getBoundingClientRect();
     const anchor = rect
       ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
       : { x: 0, y: 0 };
 
     if (e.code === 'KeyG') {
-      e.preventDefault();
+      consume();
       if (e.ctrlKey || e.metaKey) operatorSnapToFrame();
       else startModal('g', anchor);
       return;
     }
     if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
+      consume();
       startModal('s', anchor);
       return;
     }
     if (e.code === 'KeyB') {
-      e.preventDefault();
+      consume();
       startBoxSelect(anchor);
       return;
     }
     if (e.code === 'KeyV') {
-      e.preventDefault();
+      consume();
       if (selectionRef.current.size === 0) return;
       setMenu({ kind: 'handleType', x: anchor.x, y: anchor.y });
       return;
     }
     if (e.code === 'KeyT' && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
+      consume();
       if (selectionRef.current.size === 0) return;
       setMenu({ kind: 'interpolation', x: anchor.x, y: anchor.y });
       return;
     }
     if (e.code === 'KeyE' && e.shiftKey) {
-      e.preventDefault();
+      consume();
       setMenu({ kind: 'extrapolation', x: anchor.x, y: anchor.y });
       return;
     }
@@ -2669,7 +2683,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         usePreferencesStore.getState().keymapPreset, e,
       );
       if (channelDelete === 'delete') {
-        e.preventDefault();
+        consume();
         applyChannelDeleteOp();
         return;
       }
@@ -2687,12 +2701,12 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     }
     // Timeline region: X or DEL → keyform delete (Slice 5.C).
     if (e.code === 'Delete' || e.code === 'KeyX') {
-      e.preventDefault();
+      consume();
       operatorDelete();
       return;
     }
     if (e.code === 'Home') {
-      e.preventDefault();
+      consume();
       operatorHome();
       return;
     }
@@ -2721,7 +2735,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         e,
       );
       if (action !== null) {
-        e.preventDefault();
+        consume();
         applyChannelSelectAllOp(action);
         return;
       }
@@ -2730,7 +2744,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       // {"type": 'B', "value": 'PRESS'}, None)`. Bare B (no modifiers
       // — Blender's keymap entry passes no `shift/ctrl/alt`).
       if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
+        consume();
         setBGestureArmed(true);
         return;
       }
@@ -2741,7 +2755,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // Region-agnostic: armed state is a global modal, so any Escape
     // anywhere in the editor cancels.
     if (e.key === 'Escape' && bGestureArmedRef.current) {
-      e.preventDefault();
+      consume();
       setBGestureArmed(false);
       return;
     }
@@ -2797,7 +2811,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         e,
       );
       if (action !== null) {
-        e.preventDefault();
+        consume();
         // Slice 5.DD — `cascadeMode` is the channel-side cascade
         // intent. For 'toggle' it tracks the keyform-side resolution
         // (add when nothing selected, clear when something is). All
@@ -2856,17 +2870,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
         usePreferencesStore.getState().keymapPreset, e,
       );
       if (hideReveal === 'hide_selected') {
-        e.preventDefault();
+        consume();
         applyHideOp('selected');
         return;
       }
       if (hideReveal === 'hide_unselected') {
-        e.preventDefault();
+        consume();
         applyHideOp('unselected');
         return;
       }
       if (hideReveal === 'reveal') {
-        e.preventDefault();
+        consume();
         applyRevealOp();
         return;
       }
@@ -2891,7 +2905,7 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // matches both the timeline and the sidebar. SS does the same:
     // no region gating on the N key.
     if (e.code === 'KeyN' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-      e.preventDefault();
+      consume();
       setNpanelOpen((v) => !v);
       return;
     }
@@ -2921,17 +2935,17 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
     // session falls through. Tracked as queued path #17.
     if (regionHoverRef.current === 'sidebar') {
       if (e.code === 'KeyW' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
+        consume();
         applyChannelMuteOp('toggle');
         return;
       }
       if (e.code === 'KeyW' && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.altKey) {
-        e.preventDefault();
+        consume();
         applyChannelMuteOp('enable');
         return;
       }
       if (e.code === 'KeyW' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-        e.preventDefault();
+        consume();
         applyChannelMuteOp('disable');
         return;
       }
