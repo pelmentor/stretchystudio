@@ -12,6 +12,7 @@ import { useUIV3Store, selectEditorMode, getEditorMode } from '@/store/uiV3Store
 import { useSelectionStore } from '@/store/selectionStore';
 import { useBoxSelectStore } from '@/store/boxSelectStore';
 import { useEditMenuStore } from '@/store/editMenuStore';
+import { beginBatch, endBatch, discardBatch } from '@/store/undoHistory';
 // Workspace policy module deleted 2026-05-02 — workspaces no longer
 // gate modes or visualizations (Blender pattern: workspace = layout
 // preset + default editorMode, nothing more). `editor.editMode` and
@@ -3158,6 +3159,18 @@ export default function CanvasViewport({
             originIdx = i;
           }
         }
+        // Open an undo batch at stroke begin — `beginBatch` pushes the
+        // pre-stroke project snapshot, subsequent per-tick writes use
+        // `skipHistory:true` so the whole stroke collapses to one undo
+        // entry. Pre-refactor (pre-2026-06-12) this was a per-tick
+        // `skipHistory:false` on the FIRST non-empty tick, which worked
+        // but offered no rollback path — Escape-cancel-stroke needed a
+        // proper batch boundary to call `discardBatch` against.
+        // `hasTicked` tracks whether any non-empty tick fired so the
+        // pointerup commit knows whether to `endBatch` (real work) or
+        // `discardBatch` (empty click, e.g. Grab brush that never got
+        // a second pointermove).
+        beginBatch(useProjectStore.getState().project);
         dragRef.current = {
           mode:           'sculpt',
           partId:         selNode.id,
@@ -3170,7 +3183,8 @@ export default function CanvasViewport({
           // every brush as the source of "total delta since stroke
           // begin" (for `cache->grab_delta` style accumulation).
           startCursor:    { x: lx, y: ly },
-          firstTick:      true,
+          batched:        true,
+          hasTicked:      false,
           // Snapshot of vertex positions at stroke begin. Anchored
           // brushes (Blender Grab) read these — verts are repositioned
           // to `orig + total_delta * falloff` each tick, NOT
@@ -3884,21 +3898,20 @@ export default function CanvasViewport({
       sceneRef.current?.parts.uploadPositions(drag.partId, newVerts, drag.allUvs);
       isDirtyRef.current = true;
 
-      // First non-empty tick: write WITH history (push pre-stroke
-      // snapshot once). Subsequent ticks: skipHistory:true so the
-      // whole stroke collapses to one undo entry restoring pre-stroke
-      // verts. Note: Grab brush's first tick is empty (no prevCursor),
-      // so this fires on the SECOND pointermove for Grab — the
-      // pre-stroke verts are unchanged at that point so the snapshot
-      // captures the right baseline.
-      const skipHistory = !drag.firstTick;
-      drag.firstTick = false;
+      // Per-tick write — always skipHistory because the pre-stroke
+      // snapshot was already pushed by `beginBatch` at pointerdown.
+      // Mark that this stroke produced at least one real tick so the
+      // pointerup commit knows to `endBatch` vs `discardBatch` (empty
+      // strokes — e.g. Grab brush LMB-down without a second move —
+      // shouldn't pollute undo with a no-op entry).
+      //
       // MESH-002 — write rest position alongside live position in
       // Edit Mode (the rest-editing context). Pre-fix sculpt strokes
       // only updated {x,y}; pose evaluation re-skinned from unchanged
       // restX/restY, immediately undoing the sculpt visually on the
       // next param change. Object-shape vertices carry restX/restY;
       // flat-shape (test fixtures) doesn't have them — skip there.
+      drag.hasTicked = true;
       const writeRest = editorRef.current.editMode === 'edit';
       updateProject((proj2) => {
         const n2 = proj2.nodes.find((nn) => nn.id === drag.partId);
@@ -3915,7 +3928,7 @@ export default function CanvasViewport({
             }
           }
         }
-      }, { skipHistory });
+      }, { skipHistory: true });
       return;
     }
 
@@ -4110,8 +4123,23 @@ export default function CanvasViewport({
       // synthetic K dispatch is the Edit-Mode brush's "auto-commit
       // draftPose to keyframe" path; sculpt has no draftPose to commit.
       const wasSculpt = dragRef.current.mode === 'sculpt';
+      const sculptBatched = wasSculpt && dragRef.current.batched === true;
+      const sculptHadTicks = wasSculpt && dragRef.current.hasTicked === true;
       dragRef.current = null;
       canvas.style.cursor = '';
+      // Close the sculpt-stroke undo batch opened at pointerdown. If at
+      // least one tick wrote, `endBatch` collapses the per-tick writes
+      // into the single pre-stroke snapshot already on the undo stack.
+      // If no tick wrote (empty click / Grab brush with no follow-up
+      // move), `discardBatch` pops the snapshot without restoring —
+      // verts didn't change, so the no-op applyFn is correct.
+      if (sculptBatched) {
+        if (sculptHadTicks) {
+          endBatch();
+        } else {
+          discardBatch(() => { /* no verts changed; nothing to restore */ });
+        }
+      }
       // Audit-fix H-2 (Phase 7.D sweep): canvas-direct drag-end auto-key
       // was missed in the initial 7.D sweep — SkeletonOverlay + GizmoOverlay
       // were migrated to runAutoKey but this third trigger site kept the
