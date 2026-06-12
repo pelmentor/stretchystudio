@@ -48,6 +48,7 @@ import { toast } from '@/hooks/use-toast';
 import { useModalVertexTransformStore } from '@/store/modalVertexTransformStore';
 import { useModalTransformStore } from '@/store/modalTransformStore';
 import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
+import { useBrushRadiusAdjustStore } from '@/store/brushRadiusAdjustStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1917,6 +1918,36 @@ export default function CanvasViewport({
         useRadiusAdjustStore.getState().begin(prefs.proportionalEdit.radius);
         isDirtyRef.current = true;
       }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [previewMode]);
+
+  /* ── F key — Weight-Paint brush-radius modal ─────────────────────────── */
+  //
+  // Mirrors Blender's `WM_OT_radial_control` for the weight-paint brush
+  // size (Blender's `weight_paint_keymap` binds F to the radial-control
+  // operator with `data_path='tool_settings.unified_paint_settings.size'`).
+  // Press F → `BrushRadiusAdjustOverlay` takes over the keyboard +
+  // wheel + mouse via the modal-tool framework; cursor distance from
+  // the F-press anchor drives `editorStore.brushSize` in screen-px.
+  //
+  // Gated on `editMode === 'weightPaint'` only. Edit-Mode F is owned
+  // by the proportional-edit handler immediately above (different
+  // store + math). Sculpt-mode F would need its own modal because
+  // sculpt has a separate `sculpt.size` field (editorStore.js:235).
+  useEffect(() => {
+    if (previewMode) return;
+    const handler = (e) => {
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
+      if (editorRef.current.editMode !== 'weightPaint') return;
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      if (useBrushRadiusAdjustStore.getState().active) return;
+      e.preventDefault();
+      const startSize = useEditorStore.getState().brushSize;
+      useBrushRadiusAdjustStore.getState().begin(startSize);
+      isDirtyRef.current = true;
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
