@@ -46,6 +46,7 @@ import { useModalTransformStore } from '../../store/modalTransformStore.js';
 import { useModalVertexTransformStore } from '../../store/modalVertexTransformStore.js';
 import { useEditMenuStore } from '../../store/editMenuStore.js';
 import { useCircleSelectStore } from '../../store/circleSelectStore.js';
+import { useRadiusAdjustStore } from '../../store/radiusAdjustStore.js';
 import { useWizardStore } from '../../store/wizardStore.js';
 import { mountOperatorDispatcher } from '../operators/dispatcher.js';
 import { ModalToolInputDispatcher } from '../modalTool/index.js';
@@ -73,6 +74,9 @@ const ModalTransformOverlay = lazy(() =>
 );
 const ModalVertexTransformOverlay = lazy(() =>
   import('./ModalVertexTransformOverlay.jsx').then((m) => ({ default: m.ModalVertexTransformOverlay }))
+);
+const RadiusAdjustOverlay = lazy(() =>
+  import('./RadiusAdjustOverlay.jsx').then((m) => ({ default: m.RadiusAdjustOverlay }))
 );
 const MergeMenu = lazy(() =>
   import('./MergeMenu.jsx').then((m) => ({ default: m.MergeMenu }))
@@ -126,6 +130,7 @@ export function AppShell() {
   const vertexModalKind = useModalVertexTransformStore((s) => s.kind);
   const editMenuKind = useEditMenuStore((s) => s.kind);
   const circleSelectActive = useCircleSelectStore((s) => s.active);
+  const radiusAdjustActive = useRadiusAdjustStore((s) => s.active);
   const wizardStep = useWizardStore((s) => s.step);
 
   return (
@@ -162,6 +167,7 @@ export function AppShell() {
           {editMenuKind === 'canvasContextMenu' && <CanvasContextMenu />}
           {editMenuKind === 'keyingSet' && <KeyingSetMenu />}
           {circleSelectActive && <CircleSelectOverlay />}
+          {radiusAdjustActive && <RadiusAdjustOverlay />}
           {/* GAP-001 — PSD wizard mounts at AppShell level. Reads
               wizardStore for current step + pending PSD; renders nothing
               when no wizard run is in flight. The reorder/adjust banners

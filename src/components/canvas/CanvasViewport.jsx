@@ -47,6 +47,7 @@ import { frameToMs, msToFrame } from '@/lib/timeMath';
 import { toast } from '@/hooks/use-toast';
 import { useModalVertexTransformStore } from '@/store/modalVertexTransformStore';
 import { useModalTransformStore } from '@/store/modalTransformStore';
+import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -217,19 +218,11 @@ export default function CanvasViewport({
   const isDirtyRef = useRef(true);
   const brushCircleRef = useRef(null);   // SVG <circle> for brush cursor — mutated directly for perf
   const propEditCircleRef = useRef(null); // GAP-015 — proportional-edit influence ring
-  // PP1-008(b) — F→scroll→click radius adjust mode. While `active`, wheel
-  // events update proportionalEdit.radius and the next click commits +
-  // exits. ESC restores `startRadius` and exits without committing.
-  // `anchorClientX/Y` is captured at F-press for the Blender-faithful
-  // cursor-distance gesture (radius = distance(cursor, anchor) / zoom).
-  // Lives in a ref so the wheel/pointer handlers see the live state
-  // without triggering re-renders on every frame.
-  const radiusAdjustModeRef = useRef({
-    active: false,
-    startRadius: null,
-    anchorClientX: null,
-    anchorClientY: null,
-  });
+  // Phase 2.C (2026-06-12) — F-radius-adjust modal state hoisted to
+  // `radiusAdjustStore`; the modal-tool overlay `RadiusAdjustOverlay`
+  // owns F / Esc / wheel / mousedown / mousemove window-level events
+  // while active. CanvasViewport keeps only the propEdit ring rendering
+  // (reads `useRadiusAdjustStore` for the anchor + active flag).
   // Latest pointer position over the canvas, refreshed on every move so
   // F-press can snapshot it as the radius-adjust anchor. Lives outside
   // React to avoid re-rendering on mouse movement.
@@ -1844,16 +1837,15 @@ export default function CanvasViewport({
     return () => window.removeEventListener('keydown', handler);
   }, [setBrush, previewMode]);
 
-  /* ── PP1-008(b) — exit F-mode radius adjust when leaving mesh edit ── */
-  useEffect(() => {
-    if (editMode !== 'mesh' && radiusAdjustModeRef.current.active) {
-      radiusAdjustModeRef.current.active = false;
-      radiusAdjustModeRef.current.startRadius = null;
-      radiusAdjustModeRef.current.anchorClientX = null;
-      radiusAdjustModeRef.current.anchorClientY = null;
-      isDirtyRef.current = true;
-    }
-  }, [editMode]);
+  /* ── Phase 2.C — exit handled by useModalTool unregister path ───────────
+   *
+   * Pre-migration this useEffect cleared `radiusAdjustModeRef` whenever
+   * editMode flipped off 'mesh'. Now `RadiusAdjustOverlay` gates its
+   * `useModalTool` registration on `editMode === 'edit'`; the framework
+   * unregisters on isActive flip, and the store stays `active=true`
+   * but inert (no handler subscribed). When editMode returns to 'edit'
+   * the handler re-registers seamlessly. The store is also cleared by
+   * the overlay's own commit/cancel branches — no shim needed here. */
 
   /* ── GAP-015 — Blender-style proportional-edit hotkeys ───────────────── */
   // O           — toggle proportional editing on/off
@@ -1893,38 +1885,21 @@ export default function CanvasViewport({
         const next = e.key === '[' ? Math.max(5, cur.radius - step) : cur.radius + step;
         setPE({ radius: next });
       } else if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        // PP1-008(b) — F enters radius-adjust mode. Only meaningful in
-        // mesh edit; otherwise no-op (don't claim F globally). Captures
-        // the current radius so ESC can restore it. The cursor anchor
-        // is intentionally left null and snapshotted on the FIRST
-        // pointermove after F-press — this avoids using the stale
-        // (0,0) lastCursorRef when the user entered mesh-edit via the
-        // outliner / ModePill without first hovering the canvas.
-        // Toggling F again before committing exits without changing
-        // radius. Wheel adjustments still work alongside the gesture.
-        if (editorRef.current.editMode !== 'mesh') return;
+        // Phase 2.C (2026-06-12) — F press OPENS the modal. While the
+        // modal is active, the `RadiusAdjustOverlay` registered handler
+        // owns subsequent F (toggle off → commit) and Esc (restore +
+        // cancel) — both come back to bite this listener via the
+        // dispatcher's PASS_THROUGH semantic only when the modal isn't
+        // active. So this branch only handles the OPEN gesture.
+        // BUG FIX en route — pre-migration the gate was `!== 'mesh'`,
+        // but `editorStore.editMode` is `'edit'` / `'pose'` / `'sculpt'` /
+        // `'weightPaint'` (NEVER `'mesh'`), so the pre-migration F-radius
+        // modal was unreachable dead code. Phase 2.C closes that gap by
+        // using the actual `editMode === 'edit'` value.
+        if (editorRef.current.editMode !== 'edit') return;
+        if (useRadiusAdjustStore.getState().active) return;
         e.preventDefault();
-        if (radiusAdjustModeRef.current.active) {
-          radiusAdjustModeRef.current.active = false;
-          radiusAdjustModeRef.current.startRadius = null;
-          radiusAdjustModeRef.current.anchorClientX = null;
-          radiusAdjustModeRef.current.anchorClientY = null;
-        } else {
-          radiusAdjustModeRef.current.active = true;
-          radiusAdjustModeRef.current.startRadius = prefs.proportionalEdit.radius;
-          radiusAdjustModeRef.current.anchorClientX = null;
-          radiusAdjustModeRef.current.anchorClientY = null;
-        }
-        isDirtyRef.current = true;
-      } else if (e.key === 'Escape' && radiusAdjustModeRef.current.active) {
-        // PP1-008(b) — ESC cancels: restore the radius captured at F-press.
-        e.preventDefault();
-        const start = radiusAdjustModeRef.current.startRadius;
-        if (typeof start === 'number') setPE({ radius: start });
-        radiusAdjustModeRef.current.active = false;
-        radiusAdjustModeRef.current.startRadius = null;
-        radiusAdjustModeRef.current.anchorClientX = null;
-        radiusAdjustModeRef.current.anchorClientY = null;
+        useRadiusAdjustStore.getState().begin(prefs.proportionalEdit.radius);
         isDirtyRef.current = true;
       }
     };
@@ -2733,19 +2708,11 @@ export default function CanvasViewport({
   const onWheel = useCallback((e) => {
     e.preventDefault();
 
-    // PP1-008(b) — F-mode radius adjust. While active (no drag yet), wheel
-    // updates proportionalEdit.radius without zooming the canvas. The
-    // user commits the new radius with a click (handled in onPointerDown)
-    // or restores the original with ESC.
-    if (radiusAdjustModeRef.current.active) {
-      const prefs = usePreferencesStore.getState();
-      const cur = prefs.proportionalEdit;
-      const step = Math.max(2, cur.radius * 0.1);
-      const next = e.deltaY < 0 ? cur.radius + step : Math.max(5, cur.radius - step);
-      prefs.setProportionalEdit({ radius: next });
-      isDirtyRef.current = true;
-      return;
-    }
+    // Phase 2.C — F-radius modal wheel handling moved to RadiusAdjustOverlay.
+    // The overlay's `useModalTool` handler claims wheel events while active
+    // (returns RUNNING_MODAL → dispatcher stopPropagation), so this canvas
+    // wheel listener never sees the event during the modal. No early-check
+    // needed here.
 
     // GAP-015 — When a proportional-edit drag is in flight, divert the
     // wheel delta to live radius adjustment AND recompute weights
@@ -2833,16 +2800,15 @@ export default function CanvasViewport({
     // start from the OTHER tab's view and jump on the first frame.
     const view = editorRef.current.viewByMode[modeKeyRef.current];
 
-    // PP1-008(b) — F-mode radius adjust: a click commits the new radius
-    // and exits the mode. Swallow this event so it doesn't also trigger
-    // a vertex pick or pan/zoom gesture.
-    if (radiusAdjustModeRef.current.active && e.button === 0) {
-      radiusAdjustModeRef.current.active = false;
-      radiusAdjustModeRef.current.startRadius = null;
-      radiusAdjustModeRef.current.anchorClientX = null;
-      radiusAdjustModeRef.current.anchorClientY = null;
-      isDirtyRef.current = true;
-      e.preventDefault();
+    // Phase 2.C — F-radius modal commit-on-click moved to RadiusAdjustOverlay.
+    // The overlay's mousedown handler runs at window-capture BEFORE this
+    // React pointerdown fires, returning FINISHED to consume the click.
+    // But pointerdown is a separate event stream from mousedown — the
+    // dispatcher's stopPropagation on mousedown can't block the React
+    // pointerdown for the same gesture. So we still need to bail when
+    // the radius modal is active, mirroring the modal-G/R/S bail check
+    // a few lines above.
+    if (useRadiusAdjustStore.getState().active) {
       return;
     }
 
@@ -3638,29 +3604,13 @@ export default function CanvasViewport({
     lastCursorRef.current.clientX = e.clientX;
     lastCursorRef.current.clientY = e.clientY;
 
-    // PP1-008(b) — Blender-faithful gesture: while the radius-adjust
-    // mode is active, cursor distance from the anchor (F-press point)
-    // sets the proportional-edit radius. The anchor is snapshotted on
-    // the first pointermove after F-press, not at the keydown itself —
-    // that way users who entered mesh-edit via outliner / ModePill
-    // (without hovering the canvas first) still get a sane anchor at
-    // the position where their cursor actually arrives. Wheel still
-    // nudges the value alongside; last gesture wins.
-    const radiusMode = radiusAdjustModeRef.current;
-    if (radiusMode.active) {
-      if (radiusMode.anchorClientX === null) {
-        radiusMode.anchorClientX = e.clientX;
-        radiusMode.anchorClientY = e.clientY;
-      } else {
-        const dxAnchor = e.clientX - radiusMode.anchorClientX;
-        const dyAnchor = e.clientY - radiusMode.anchorClientY;
-        const screenDist = Math.hypot(dxAnchor, dyAnchor);
-        const zoomNow = editorRef.current.viewByMode[modeKey].zoom;
-        const meshRadius = Math.max(5, screenDist / Math.max(0.0001, zoomNow));
-        usePreferencesStore.getState().setProportionalEdit({ radius: meshRadius });
-      }
-      isDirtyRef.current = true;
-    }
+    // Phase 2.C — F-radius modal cursor-distance gesture moved to
+    // RadiusAdjustOverlay. The overlay's mousemove handler runs at
+    // window-capture; since it returns RUNNING_MODAL the dispatcher
+    // calls stopPropagation, but pointermove is a separate event
+    // stream from mousemove and still flows to this React handler.
+    // We only need to read the store for the ring rendering below.
+    const radiusMode = useRadiusAdjustStore.getState();
 
     if (propEditCircleRef.current) {
       const peCfg = usePreferencesStore.getState().proportionalEdit;
@@ -3680,11 +3630,13 @@ export default function CanvasViewport({
         // user "draws" the radius). Outside F-mode the ring follows the
         // cursor as before, since proportional-edit's normal preview is
         // a brush-like indicator at the active vertex location.
-        const ringX = (radiusMode.active && typeof radiusMode.anchorClientX === 'number')
-          ? radiusMode.anchorClientX - rect.left
+        const ringX = (radiusMode.active && radiusMode.anchorClient
+                       && typeof radiusMode.anchorClient.x === 'number')
+          ? radiusMode.anchorClient.x - rect.left
           : e.clientX - rect.left;
-        const ringY = (radiusMode.active && typeof radiusMode.anchorClientY === 'number')
-          ? radiusMode.anchorClientY - rect.top
+        const ringY = (radiusMode.active && radiusMode.anchorClient
+                       && typeof radiusMode.anchorClient.y === 'number')
+          ? radiusMode.anchorClient.y - rect.top
           : e.clientY - rect.top;
         propEditCircleRef.current.setAttribute('cx', ringX);
         propEditCircleRef.current.setAttribute('cy', ringY);
