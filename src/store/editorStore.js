@@ -841,6 +841,32 @@ export const useEditorStore = create((set) => ({
     return { selectedVertexIndices: next };
   }),
 
+  /** Invert the part's vertex selection — every index in [0, vertCount)
+   *  not currently selected becomes selected; every selected index
+   *  becomes unselected. Active vertex stays put if still selected,
+   *  else clears. Mirrors Blender's `mesh.select_all(action='INVERT')`. */
+  invertVertexSelection: (partId, vertCount) => set((s) => {
+    if (typeof partId !== 'string' || partId.length === 0) return s;
+    if (!Number.isInteger(vertCount) || vertCount <= 0) return s;
+    const cur = s.selectedVertexIndices.get(partId);
+    const fresh = new Set();
+    for (let i = 0; i < vertCount; i++) {
+      if (!cur || !cur.has(i)) fresh.add(i);
+    }
+    const next = new Map(s.selectedVertexIndices);
+    if (fresh.size === 0) {
+      next.delete(partId);
+    } else {
+      next.set(partId, fresh);
+    }
+    const av = s.activeVertex;
+    const activeStillSelected = !!(av && av.partId === partId && fresh.has(av.vertIndex));
+    const activeVertex = activeStillSelected
+      ? av
+      : (av && av.partId === partId ? null : av);
+    return { selectedVertexIndices: next, activeVertex };
+  }),
+
   /** Drop the part's selection entirely. Clears the active vertex when
    *  it pointed at this part. */
   deselectAllVertices: (partId) => set((s) => {

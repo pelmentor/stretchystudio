@@ -88,6 +88,14 @@ export const DEFAULT_KEYMAP = {
   // Mode + select tool, else falls through to object deselect).
   'Alt+KeyA': 'selection.deselectAll',
 
+  // Phase 4 paint-fidelity follow-up — Ctrl+I invert selection.
+  // Polymorphic: Edit Mode → vertex invert (mesh.select_all INVERT);
+  // Pose Mode → bone invert (pose.select_all INVERT, visible bones
+  // only); Object Mode → part invert (object.select_all INVERT,
+  // visible parts only). Mirrors Blender's same-chord-different-target
+  // pattern across modes.
+  'Ctrl+KeyI': 'selection.invert',
+
   // Delete selected project nodes. Both Delete and Backspace are
   // common muscle memory; bind both. (Backspace alone fires inside
   // editable inputs anyway, but the dispatcher's editable-target

@@ -531,6 +531,87 @@ function registerBuiltins() {
     },
   });
 
+  // Phase 4 paint-fidelity follow-up — Ctrl+I invert selection.
+  // Polymorphic by mode (Blender's same-chord-different-target
+  // pattern):
+  //
+  //   - Edit Mode + select tool → `mesh.select_all(action='INVERT')`.
+  //     Active vertex stays if still selected, else clears.
+  //   - Pose Mode → `pose.select_all(action='INVERT')` scoped to
+  //     visible bones in the project. Non-bone items (parts, armature
+  //     roots) untouched.
+  //   - Object Mode → `object.select_all(action='INVERT')` over
+  //     visible parts. Non-part items untouched.
+  //
+  // The polymorphism mirrors selection.selectAllToggle's structure —
+  // each mode reads its canonical selection store + writes back the
+  // complement.
+  registerOperator({
+    id: 'selection.invert',
+    label: 'Invert Selection',
+    exec: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'edit' && editor.toolMode === 'select') {
+        const activePartId = editor.selection?.[0];
+        if (typeof activePartId !== 'string' || activePartId.length === 0) return;
+        const project = useProjectStore.getState().project;
+        const node = project?.nodes?.find((n) => n?.id === activePartId);
+        if (!node || node.type !== 'part') return;
+        const mesh = getMesh(node, project);
+        const vertCount = Array.isArray(mesh?.vertices) ? mesh.vertices.length : 0;
+        if (vertCount === 0) return;
+        editor.invertVertexSelection(activePartId, vertCount);
+        return;
+      }
+      if (editor.editMode === 'pose') {
+        const project = useProjectStore.getState().project;
+        const boneIds = (project?.nodes ?? [])
+          .filter((n) => n && n.type === 'group'
+            && typeof n.boneRole === 'string' && n.boneRole.length > 0
+            && n.visible !== false)
+          .map((n) => n.id);
+        if (boneIds.length === 0) return;
+        const sel = useSelectionStore.getState();
+        const selectedBoneIds = new Set(
+          sel.items.filter((it) => it?.type === 'group' && boneIds.includes(it.id))
+            .map((it) => it.id),
+        );
+        const nonBoneItems = sel.items.filter((it) =>
+          !(it?.type === 'group' && boneIds.includes(it.id)));
+        const invertedBoneItems = boneIds
+          .filter((id) => !selectedBoneIds.has(id))
+          .map((id) => ({ type: 'group', id }));
+        const finalItems = [...nonBoneItems, ...invertedBoneItems];
+        sel.select(finalItems, 'replace');
+        useEditorStore.getState().setSelection(finalItems.length > 0
+          ? [finalItems[finalItems.length - 1].id]
+          : []);
+        return;
+      }
+      // Object Mode (or any non-edit non-pose) — invert visible parts.
+      const project = useProjectStore.getState().project;
+      const partIds = (project?.nodes ?? [])
+        .filter((n) => n?.type === 'part' && n.visible !== false)
+        .map((n) => n.id);
+      if (partIds.length === 0) return;
+      const sel = useSelectionStore.getState();
+      const selectedPartIds = new Set(
+        sel.items.filter((it) => it?.type === 'part' && partIds.includes(it.id))
+          .map((it) => it.id),
+      );
+      const nonPartItems = sel.items.filter((it) =>
+        !(it?.type === 'part' && partIds.includes(it.id)));
+      const invertedPartItems = partIds
+        .filter((id) => !selectedPartIds.has(id))
+        .map((id) => ({ type: 'part', id }));
+      const finalItems = [...nonPartItems, ...invertedPartItems];
+      sel.select(finalItems, 'replace');
+      useEditorStore.getState().setSelection(finalItems.length > 0
+        ? [finalItems[finalItems.length - 1].id]
+        : []);
+    },
+  });
+
   // Delete the active selection. Polymorphic by mode (Blender's X
   // pattern — same chord, different operator per workspace mode):
   //
