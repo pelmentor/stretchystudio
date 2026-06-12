@@ -113,9 +113,17 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
   // surface in this overlay must call through here — direct
   // `setSelection([id])` only writes the legacy store, leaving Pose Mode
   // greyed out in ModePill (which subscribes to universal only).
-  const selectBoneInBothStores = useCallback((nodeId) => {
-    setSelection([nodeId]);
-    useSelectionStore.getState().select({ type: 'group', id: nodeId }, 'replace');
+  const selectBoneInBothStores = useCallback((nodeId, mode = 'replace') => {
+    const sel = useSelectionStore.getState();
+    sel.select({ type: 'group', id: nodeId }, mode);
+    // Sync legacy editorStore.selection slot — Properties / GizmoOverlay
+    // read this for the active head. Re-read items AFTER the toggle so
+    // a toggle-deselect that nulls the selection writes [].
+    const itemsAfter = useSelectionStore.getState().items;
+    const activeHead = itemsAfter.length > 0
+      ? itemsAfter[itemsAfter.length - 1].id
+      : null;
+    setSelection(activeHead ? [activeHead] : []);
   }, [setSelection]);
   const animCurrentTime       = useAnimationStore(s => s.currentTime);
   const animActiveActionId    = useAnimationStore(s => s.activeActionId);
@@ -231,7 +239,13 @@ export default function SkeletonOverlay({ view, editorMode, showSkeleton, skelet
       if (useEditorStore.getState().editMode === 'pose'
           && useEditorStore.getState().toolMode === 'select') {
         e.currentTarget.releasePointerCapture(e.pointerId);
-        selectBoneInBothStores(nodeId);
+        // Phase 4 follow-up — Shift+LMB toggles bone in selection
+        // (Blender's `pose.select_box` / individual-click toggle
+        // behavior in `pose_mode_keymap`). Without Shift the click is
+        // a single-replace. Ctrl/Cmd reserved for future
+        // connected-path-select.
+        const mode = e.shiftKey ? 'toggle' : 'replace';
+        selectBoneInBothStores(nodeId, mode);
         return;
       }
       const drag = { type: 'joint', nodeId };
