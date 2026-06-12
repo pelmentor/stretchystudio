@@ -432,6 +432,38 @@ function registerBuiltins() {
         }
         return;
       }
+      // Phase 4 paint-fidelity follow-up — Pose Mode bone-scoped A.
+      // Blender's pose_mode_keymap binds A to `pose.select_all` which
+      // toggles every bone in the armature. SS pre-fix fell through to
+      // the Object Mode branch below, which (a) cleared bone selection
+      // if anything was selected, then (b) on next press selected all
+      // PARTS in the project instead of bones — both wrong for Pose Mode.
+      // Now: if any bone is selected → clear; else → select all visible
+      // bone groups.
+      if (editor.editMode === 'pose') {
+        const project = useProjectStore.getState().project;
+        const boneIds = (project?.nodes ?? [])
+          .filter((n) => n && n.type === 'group'
+            && typeof n.boneRole === 'string' && n.boneRole.length > 0
+            && n.visible !== false)
+          .map((n) => n.id);
+        if (boneIds.length === 0) return;
+        const sel = useSelectionStore.getState();
+        const selectedBones = sel.items.filter((it) =>
+          it?.type === 'group' && boneIds.includes(it.id));
+        if (selectedBones.length > 0) {
+          // Some bones selected → deselect. Mirror Blender's "first
+          // press of A clears if any selected, second press selects all."
+          sel.clear();
+          useEditorStore.getState().setSelection([]);
+          return;
+        }
+        sel.select(boneIds.map((id) => ({ type: 'group', id })), 'replace');
+        // Legacy slot — active head is the last bone (matches the Object
+        // Mode branch convention).
+        useEditorStore.getState().setSelection([boneIds[boneIds.length - 1]]);
+        return;
+      }
       const sel = useSelectionStore.getState();
       if (sel.items.length > 0) {
         sel.clear();
@@ -465,6 +497,31 @@ function registerBuiltins() {
         } else {
           editor.clearAllVertexSelections();
         }
+        return;
+      }
+      // Phase 4 paint-fidelity follow-up — Pose Mode bone-scoped Alt+A.
+      // Mirrors Blender's `pose.select_all(action='DESELECT')`. In Pose
+      // Mode this should ONLY clear bone selection — leaving Object
+      // selection alone matters if a user had selected an armature root
+      // then entered Pose Mode (the armature stays selected as the
+      // active object, and Alt+A only nukes per-bone selection within).
+      // SS's selectionStore is unified, so distinguishing "bone vs
+      // part" selection inside requires filtering — clear only group
+      // items with a boneRole.
+      if (editor.editMode === 'pose') {
+        const project = useProjectStore.getState().project;
+        const isBone = (it) => {
+          if (it?.type !== 'group') return false;
+          const node = project?.nodes?.find((n) => n?.id === it.id);
+          return !!node && typeof node.boneRole === 'string' && node.boneRole.length > 0;
+        };
+        const sel = useSelectionStore.getState();
+        const nonBoneItems = sel.items.filter((it) => !isBone(it));
+        if (nonBoneItems.length === sel.items.length) return; // nothing bone-y selected
+        sel.select(nonBoneItems, 'replace');
+        editor.setSelection(nonBoneItems.length > 0
+          ? [nonBoneItems[nonBoneItems.length - 1].id]
+          : []);
         return;
       }
       const sel = useSelectionStore.getState();
