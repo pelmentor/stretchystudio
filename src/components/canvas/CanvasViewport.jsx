@@ -1861,8 +1861,23 @@ export default function CanvasViewport({
     if (previewMode) return;
     const handler = (e) => {
       if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
-      const ws = activeWorkspaceRef.current;
-      if (ws !== 'default') return;
+      // Blender-faithful gate: proportional-edit chords (O / Shift+O / Alt+O /
+      // Ctrl+[/] / F) ONLY fire in Edit Mode. Pre-2026-06-12 this gate read
+      // `activeWorkspaceRef.current !== 'default'` — but the workspace was
+      // renamed from 'default' → 'layout' on 2026-05-16 (uiV3Store.js:33
+      // typedef). The string `'default'` no longer matches any value
+      // `activeWorkspace` can hold, so the gate was always-true → the entire
+      // handler returned for every keypress, leaving:
+      //   - O (toggle proportional edit)
+      //   - Shift+O (cycle falloff curve)
+      //   - Alt+O (toggle connected-only)
+      //   - Ctrl+[ / Ctrl+] (shrink/grow proportional radius)
+      //   - F (open radius-adjust modal — also dead via the inner gate
+      //         fixed in Phase 2.C `ecf0c10`; THIS gate killed it first)
+      // all unreachable since the workspace rename. Replaced with the
+      // canonical `editMode === 'edit'` check (Blender's PROP_EDIT
+      // chords are Edit-Mode-only).
+      if (editorRef.current.editMode !== 'edit') return;
       const prefs = usePreferencesStore.getState();
       const setPE = prefs.setProportionalEdit;
       if (e.key === 'o' || e.key === 'O') {
