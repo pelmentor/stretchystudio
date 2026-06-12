@@ -2692,6 +2692,50 @@ function Plot({ action, activeActionId, decoded, activeFCurveId, currentTime, fp
       setMenu({ kind: 'extrapolation', x: anchor.x, y: anchor.y });
       return;
     }
+    // Phase 4 paint-fidelity follow-up — bare L expands keyform
+    // selection to FULL fcurve coverage. Mirrors Blender's
+    // GRAPH_OT_select_linked (`reference/blender/source/blender/editors
+    // /space_graph/graph_select.cc:740-754`) — for every fcurve that
+    // has at least one selected keyform, select all of that fcurve's
+    // keyforms. Pure state op — no cursor hit-test needed (unlike
+    // Edit Mode's MESH_OT_select_linked_pick which does need one).
+    //
+    // The global `select.linked.cursor` operator handles Edit Mode
+    // vertex linked-pick and Pose Mode bone linked-from-selection;
+    // FCurve takes its own L handler here because the cursor-aware
+    // global path would need DOM hit-test of the rendered keyform
+    // dots, and the fcurve-level linked semantic doesn't need that —
+    // any selected dot expands the whole curve.
+    if (e.code === 'KeyL' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      consume();
+      const curHandles = selectionRef.current;
+      // Any fcurve with at least one selected entry contributes; if
+      // nothing selected the op is a no-op (matches Blender, which
+      // returns OPERATOR_CANCELLED at graph_select.cc:723).
+      const fcurveIdsWithSelection = [];
+      for (const [fcurveId, sub] of curHandles) {
+        if (sub && sub.size > 0) fcurveIdsWithSelection.push(fcurveId);
+      }
+      if (fcurveIdsWithSelection.length === 0) return;
+      // Build a complete-coverage handles map for those fcurves.
+      const next = new Map();
+      for (const fcurveId of fcurveIdsWithSelection) {
+        const fc = action?.fcurves?.find((f) => f.id === fcurveId);
+        if (!fc || !Array.isArray(fc.keyforms)) continue;
+        const inner = new Map();
+        for (let i = 0; i < fc.keyforms.length; i++) {
+          inner.set(i, { center: true, left: true, right: true });
+        }
+        if (inner.size > 0) next.set(fcurveId, inner);
+      }
+      // Preserve any fcurves NOT in fcurveIdsWithSelection — they
+      // were untouched; pass through unchanged. (Currently curHandles
+      // only carries selected entries, so non-selected fcurves don't
+      // appear at all — this loop is the natural shape regardless.)
+      setSelectedHandles(next);
+      selectionRef.current = next;
+      return;
+    }
     // Slice 5.N + 5.II — region-aware delete dispatch.
     //
     // Blender's two delete operators:
