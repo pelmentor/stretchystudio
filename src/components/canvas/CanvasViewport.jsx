@@ -49,6 +49,7 @@ import { useModalVertexTransformStore } from '@/store/modalVertexTransformStore'
 import { useModalTransformStore } from '@/store/modalTransformStore';
 import { useRadiusAdjustStore } from '@/store/radiusAdjustStore';
 import { useBrushRadiusAdjustStore } from '@/store/brushRadiusAdjustStore';
+import { useBrushStrengthAdjustStore } from '@/store/brushStrengthAdjustStore';
 import { ScenePass } from '@/renderer/scenePass';
 // `importPsd` is dynamic-imported inside `processPsdFile` — keeps
 // ag-psd (and its inflate dependency) out of the boot bundle until
@@ -1923,14 +1924,21 @@ export default function CanvasViewport({
     return () => window.removeEventListener('keydown', handler);
   }, [previewMode]);
 
-  /* ── F key — Weight-Paint brush-radius modal ─────────────────────────── */
+  /* ── F / Shift+F — Weight-Paint brush radius/strength modals ──────────── */
   //
-  // Mirrors Blender's `WM_OT_radial_control` for the weight-paint brush
-  // size (Blender's `weight_paint_keymap` binds F to the radial-control
-  // operator with `data_path='tool_settings.unified_paint_settings.size'`).
-  // Press F → `BrushRadiusAdjustOverlay` takes over the keyboard +
-  // wheel + mouse via the modal-tool framework; cursor distance from
-  // the F-press anchor drives `editorStore.brushSize` in screen-px.
+  // Mirrors Blender's `WM_OT_radial_control`:
+  //   - F      → brush size (`editorStore.brushSize`, screen-px)
+  //   - Shift+F → brush strength (`editorStore.brushStrength`, [0,1])
+  //
+  // Blender's `weight_paint_keymap` binds both to the radial-control
+  // operator with different `data_path` targets. SS implements each as
+  // its own modal store + overlay (`brushRadiusAdjustStore` +
+  // `brushStrengthAdjustStore`); see those modules' docblocks for the
+  // rationale on parallel-rather-than-generalised state.
+  //
+  // While either modal is live the corresponding overlay returns
+  // RUNNING_MODAL from its handler to suppress propagation — the
+  // WeightPaintOverlay can't start a stroke, the canvas can't V2D-zoom.
   //
   // Gated on `editMode === 'weightPaint'` only. Edit-Mode F is owned
   // by the proportional-edit handler immediately above (different
@@ -1941,12 +1949,21 @@ export default function CanvasViewport({
     const handler = (e) => {
       if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
       if (editorRef.current.editMode !== 'weightPaint') return;
-      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'f' && e.key !== 'F') return;
-      if (useBrushRadiusAdjustStore.getState().active) return;
-      e.preventDefault();
-      const startSize = useEditorStore.getState().brushSize;
-      useBrushRadiusAdjustStore.getState().begin(startSize);
+      if (e.shiftKey) {
+        if (useBrushStrengthAdjustStore.getState().active) return;
+        e.preventDefault();
+        useBrushStrengthAdjustStore.getState().begin(
+          useEditorStore.getState().brushStrength,
+        );
+      } else {
+        if (useBrushRadiusAdjustStore.getState().active) return;
+        e.preventDefault();
+        useBrushRadiusAdjustStore.getState().begin(
+          useEditorStore.getState().brushSize,
+        );
+      }
       isDirtyRef.current = true;
     };
     window.addEventListener('keydown', handler);
