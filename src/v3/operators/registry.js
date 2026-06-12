@@ -819,6 +819,70 @@ function registerBuiltins() {
     },
   });
 
+  // Phase 4 paint-fidelity follow-up — UpArrow / DownArrow jump to
+  // prev/next keyframe (Blender's space_time / space_action /
+  // space_graph keymaps). Walks the active action's fcurves, collects
+  // every keyform's `.time` (ms — matches `applyKeyingSet`'s contract
+  // documented at insertKeyframe.js:386), finds the smallest >
+  // currentTime (next) or largest < currentTime (prev). At the
+  // boundary (no keyforms in the target direction) the operator is
+  // a no-op — Blender does the same.
+  //
+  // Conceptually a sibling to LeftArrow/RightArrow (±1 frame), but
+  // semantically different — keyframe jumps are content-aware
+  // navigation, not fixed steps.
+  function collectAllKeyframeTimesMs() {
+    const project = useProjectStore.getState().project;
+    if (!project) return [];
+    const active = getActiveSceneAction(project, useAnimationStore.getState().activeActionId);
+    if (!active || !Array.isArray(active.fcurves)) return [];
+    /** @type {number[]} */
+    const times = [];
+    for (const fc of active.fcurves) {
+      if (!Array.isArray(fc?.keyforms)) continue;
+      for (const k of fc.keyforms) {
+        if (typeof k?.time === 'number' && Number.isFinite(k.time)) {
+          times.push(k.time);
+        }
+      }
+    }
+    return times;
+  }
+
+  registerOperator({
+    id: 'time.jumpToNextKeyframe',
+    label: 'Jump to Next Keyframe',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const cur = anim.currentTime ?? 0;
+      const times = collectAllKeyframeTimesMs();
+      let best = Infinity;
+      for (const t of times) {
+        if (t > cur && t < best) best = t;
+      }
+      if (!Number.isFinite(best)) return; // no keyframe after current
+      anim.seekTime(best);
+    },
+  });
+
+  registerOperator({
+    id: 'time.jumpToPrevKeyframe',
+    label: 'Jump to Previous Keyframe',
+    available: animationHoverGate,
+    exec: () => {
+      const anim = useAnimationStore.getState();
+      const cur = anim.currentTime ?? 0;
+      const times = collectAllKeyframeTimesMs();
+      let best = -Infinity;
+      for (const t of times) {
+        if (t < cur && t > best) best = t;
+      }
+      if (!Number.isFinite(best)) return; // no keyframe before current
+      anim.seekTime(best);
+    },
+  });
+
   // file.new — opens the New Project template picker (mounts in
   // Topbar.jsx, gated by `newProjectDialogStore.open`). The dialog
   // owns reset + template-apply + dirty-warning UX. The chord

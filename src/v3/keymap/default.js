@@ -93,6 +93,13 @@ export const DEFAULT_KEYMAP = {
   'Shift+ArrowLeft':  'time.jumpToStart',
   'Shift+ArrowRight': 'time.jumpToEnd',
 
+  // UpArrow / DownArrow jump to next/prev keyframe across the active
+  // action's fcurves. Mirrors Blender's space_time / space_action /
+  // space_graph default — content-aware navigation, sibling to the
+  // fixed ±1 frame step above.
+  'ArrowDown':        'time.jumpToPrevKeyframe',
+  'ArrowUp':          'time.jumpToNextKeyframe',
+
   // Selection: drop everything. Bare Esc — same as Blender.
   'Escape': 'selection.clear',
 
