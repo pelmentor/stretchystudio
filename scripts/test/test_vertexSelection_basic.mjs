@@ -99,8 +99,15 @@ function reset() {
   useEditorStore.getState().toggleVertexSelection('partA', 3);
   assert(!useEditorStore.getState().selectedVertexIndices.has('partA'),
     'Test 4: toggle removes when present (set emptied → key dropped)');
-  assert(useEditorStore.getState().activeVertex === null,
-    'Test 4: toggle clears active on remove');
+  // 2026-06-12 — Blender-faithful fix: Shift+LMB ALWAYS sets the
+  // clicked vert as active, even when toggling deselects it. Mirrors
+  // Blender's `BM_select_history_store(ele)` which fires
+  // unconditionally in `EDBM_select_pick`. See
+  // `test_toggleVertexActiveFollowsClick.mjs` for the dedicated
+  // regression + rationale.
+  assert(useEditorStore.getState().activeVertex?.partId === 'partA'
+         && useEditorStore.getState().activeVertex?.vertIndex === 3,
+    'Test 4: toggle KEEPS active at clicked vert even on deselect (Blender-faithful)');
 }
 
 // ── Test 5: setVertexSelectionForPart replaces with iterable ──

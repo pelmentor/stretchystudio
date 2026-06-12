@@ -771,9 +771,27 @@ export const useEditorStore = create((set) => ({
     return { selectedVertexIndices: next, activeVertex };
   }),
 
-  /** Toggle one vertex's membership. Sets the active vertex to the
-   *  toggled (partId, vertIndex) when adding; clears it when removing
-   *  the active vertex. */
+  /** Toggle one vertex's membership. The toggled vertex ALWAYS becomes
+   *  the new active vertex — whether the toggle added or removed it
+   *  from the selection. Mirrors Blender's
+   *  `EDBM_select_pick` semantic (`editors/mesh/editmesh_select.cc`):
+   *  every Shift+LMB call to `BM_select_history_store(bm, ele)` runs
+   *  unconditionally, so the click target is the new head of selection
+   *  history (which is what Blender treats as the "active element") —
+   *  regardless of whether the toggle ended up selecting or deselecting.
+   *
+   *  Pre-2026-06-12 SS cleared `activeVertex` to null when the toggle
+   *  deselected the previously-active vert. That diverged from Blender
+   *  in three user-visible ways:
+   *
+   *   1. `edit.merge.atLast` reads activeVertex; Shift+LMB-deselecting
+   *      the active broke the operator until you re-clicked another
+   *      vert.
+   *   2. Numpad `.` (Frame Selected) uses activeVertex to centre the
+   *      camera; deselect-the-active stranded the camera.
+   *   3. The white-bordered active dot disappeared whenever users were
+   *      iterating "select, change my mind, deselect" — the muscle-memory
+   *      "what's my current focus" mark was gone. */
   toggleVertexSelection: (partId, vertIndex) => set((s) => {
     if (typeof partId !== 'string' || partId.length === 0) return s;
     if (!Number.isInteger(vertIndex) || vertIndex < 0) return s;
@@ -784,10 +802,8 @@ export const useEditorStore = create((set) => ({
       fresh.delete(vertIndex);
       if (fresh.size === 0) next.delete(partId);
       else next.set(partId, fresh);
-      const av = s.activeVertex;
-      const activeVertex = (av && av.partId === partId && av.vertIndex === vertIndex)
-        ? null : av;
-      return { selectedVertexIndices: next, activeVertex };
+      // Blender-faithful: active follows the click even when toggling off.
+      return { selectedVertexIndices: next, activeVertex: { partId, vertIndex } };
     }
     const fresh = cur ? new Set(cur) : new Set();
     fresh.add(vertIndex);
