@@ -1849,11 +1849,127 @@ function registerBuiltins() {
     editor.selectVertex(partId, seedIdx, /* additive */ true);
   }
 
+  // Phase 4 paint-fidelity follow-up — Pose Mode bone-linked-select.
+  // Walks parent chain from each selected bone up to the armature
+  // root (topmost ancestor that is NOT a bone — i.e. a group without
+  // boneRole, or the project root). Then collects all visible bones
+  // whose parent chain reaches the SAME armature root. Mirrors
+  // Blender's `pose.select_linked` semantic — bones in the same
+  // armature object as the active selection.
+  //
+  // If no bone is selected, no-op (matches Blender). If selected
+  // bones span multiple armatures, the union of all their armatures'
+  // bones is selected.
+  function runSelectLinkedPoseBones() {
+    const project = useProjectStore.getState().project;
+    if (!project?.nodes) return;
+    const byId = new Map();
+    for (const n of project.nodes) if (n?.id) byId.set(n.id, n);
+    const isBone = (n) => !!n && n.type === 'group'
+      && typeof n.boneRole === 'string' && n.boneRole.length > 0;
+    // Step 1: walk parent chains from currently-selected bones to
+    // find their armature roots (the first non-bone ancestor).
+    const sel = useSelectionStore.getState();
+    const selectedBoneIds = sel.items
+      .filter((it) => it?.type === 'group' && isBone(byId.get(it.id)))
+      .map((it) => it.id);
+    if (selectedBoneIds.length === 0) return;
+    const armatureRootIds = new Set();
+    for (const bid of selectedBoneIds) {
+      let cur = byId.get(bid);
+      const seen = new Set();
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        if (!cur.parent) {
+          // Top-level bone — its "armature root" is the project root.
+          // Use a sentinel since the project root has no node id.
+          armatureRootIds.add('__projectRoot__');
+          break;
+        }
+        const parent = byId.get(cur.parent);
+        if (!parent) break;
+        if (!isBone(parent)) {
+          // First non-bone ancestor = armature root.
+          armatureRootIds.add(parent.id);
+          break;
+        }
+        cur = parent;
+      }
+    }
+    if (armatureRootIds.size === 0) return;
+    // Step 2: collect every visible bone whose chain reaches one of
+    // the armature roots. Memoise per-bone-root lookup so a deep
+    // armature doesn't re-walk shared upper chain N times.
+    const boneToRoot = new Map();
+    const rootOf = (id) => {
+      if (boneToRoot.has(id)) return boneToRoot.get(id);
+      let cur = byId.get(id);
+      const path = [];
+      const seen = new Set();
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        path.push(cur.id);
+        if (!cur.parent) {
+          for (const p of path) boneToRoot.set(p, '__projectRoot__');
+          return '__projectRoot__';
+        }
+        const parent = byId.get(cur.parent);
+        if (!parent) break;
+        if (!isBone(parent)) {
+          for (const p of path) boneToRoot.set(p, parent.id);
+          return parent.id;
+        }
+        cur = parent;
+      }
+      for (const p of path) boneToRoot.set(p, null);
+      return null;
+    };
+    const linkedItems = [];
+    for (const n of project.nodes) {
+      if (!isBone(n)) continue;
+      if (n.visible === false) continue;
+      const r = rootOf(n.id);
+      if (r && armatureRootIds.has(r)) {
+        linkedItems.push({ type: 'group', id: n.id });
+      }
+    }
+    if (linkedItems.length === 0) return;
+    // Preserve non-bone selection items (parts, plain groups,
+    // armature roots without boneRole).
+    const nonBoneItems = sel.items.filter((it) =>
+      !(it?.type === 'group' && isBone(byId.get(it.id))));
+    const finalItems = [...nonBoneItems, ...linkedItems];
+    sel.select(finalItems, 'replace');
+    useEditorStore.getState().setSelection(finalItems.length > 0
+      ? [finalItems[finalItems.length - 1].id]
+      : []);
+  }
+
   registerOperator({
     id: 'select.linked.cursor',
-    label: 'Select Linked (under cursor) (L)',
-    available: () => activeEditPart() !== null,
-    exec: () => runSelectLinkedCursor(/* deselect */ false),
+    label: 'Select Linked (L)',
+    available: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'pose') {
+        // Pose Mode: need at least one bone selected.
+        const project = useProjectStore.getState().project;
+        if (!project?.nodes) return false;
+        return useSelectionStore.getState().items.some((it) => {
+          if (it?.type !== 'group') return false;
+          const n = project.nodes.find((nn) => nn?.id === it.id);
+          return !!n && typeof n.boneRole === 'string' && n.boneRole.length > 0;
+        });
+      }
+      return activeEditPart() !== null;
+    },
+    exec: () => {
+      const editor = useEditorStore.getState();
+      if (editor.editMode === 'pose') {
+        runSelectLinkedPoseBones();
+        return;
+      }
+      runSelectLinkedCursor(/* deselect */ false);
+    },
   });
 
   // Audit fix D-2 — Blender binds Shift+L to the same operator with
