@@ -86,6 +86,62 @@ import { gatherPhysicsRules } from '../../io/live2d/rig/physicsConfig.js';
 import { createPhysicsState, tickPhysics, buildParamSpecs } from '../../io/live2d/runtime/physicsTick.js';
 import { computeParamOverrides } from '../../renderer/animationEngine.js';
 import { insertKeyformAtInAction, INSERTKEY_FLAGS } from '../../anim/insertKeyframe.js';
+import { sanitisePartName } from '../../lib/partId.js';
+import { getBoneRole } from '../../store/objectDataAccess.js';
+
+/**
+ * Resolve `ParamRotation_<sanitized>` → bone node id.
+ *
+ * Why this exists: bone physics outputs are stored as `ParamRotation_*`
+ * synthetic params at SEED time (see physicsConfig.js:resolveRuleOutputs).
+ * During live preview, CanvasViewport's PARAM → BONE mirror translates
+ * these param values into bone rotations every tick. But that mirror
+ * runs PREVIEW-MODE ONLY (CanvasViewport.jsx:1231 — animation-mode was
+ * deliberately gated off to prevent editor-mode slider defaults from
+ * clobbering gestures).
+ *
+ * Consequence: if bake writes `objects["__params__"].values["ParamRotation_LeftElbow"]`
+ * fcurves, the animation engine evaluates them but the bone doesn't
+ * move during playback — the mirror is gated off. Hair / clothing /
+ * bust physics outputs target REAL Cubism params (ParamHairFront etc.)
+ * that drive warps directly, so they don't hit this gap.
+ *
+ * Fix: write bone-output physics directly to the bone's pose.rotation
+ * rnaPath, bypassing the param-mirror entirely. The canonical bone
+ * rotation rnaPath is `objects["<boneId>"].pose.rotation` (see
+ * rnaPath.js:16, animationFCurve.js:300).
+ *
+ * @param {object} project
+ * @param {string} paramId
+ * @returns {string|null} bone node id, or null if not a bone param
+ */
+function resolveBoneIdForParamRotation(project, paramId) {
+  if (typeof paramId !== 'string') return null;
+  const match = paramId.match(/^ParamRotation_(.+)$/);
+  if (!match) return null;
+  const sanitised = match[1];
+  for (const node of project?.nodes ?? []) {
+    if (!node || node.type !== 'group') continue;
+    if (!getBoneRole(node)) continue;
+    if (sanitisePartName(node.name || node.id) === sanitised) return node.id;
+  }
+  return null;
+}
+
+/**
+ * Canonical record rnaPath for a baked output. Bone-mirrored params
+ * (ParamRotation_<sanitized>) resolve to the bone's pose.rotation;
+ * everything else stays on the __params__ path.
+ *
+ * @param {object} project
+ * @param {string} paramId
+ * @returns {string}
+ */
+function rnaPathForBakedOutput(project, paramId) {
+  const boneId = resolveBoneIdForParamRotation(project, paramId);
+  if (boneId) return `objects["${boneId}"].pose.rotation`;
+  return `objects["__params__"].values["${paramId}"]`;
+}
 
 /**
  * @typedef {Object} BakePhysicsOptions
@@ -243,6 +299,17 @@ export function bakePhysics(action, project, options = {}) {
     }
   }
 
+  // Pre-resolve each output paramId to its canonical rnaPath. Bone-
+  // output params (ParamRotation_*) get bone pose.rotation rnaPaths;
+  // everything else stays on the __params__ values path. See
+  // `resolveBoneIdForParamRotation` docblock for the mirror-gap
+  // rationale this works around.
+  /** @type {Map<string, string>} */
+  const rnaPathByParamId = new Map();
+  for (const pid of outputParamIds) {
+    rnaPathByParamId.set(pid, rnaPathForBakedOutput(project, pid));
+  }
+
   /** @type {BakeRecord[]} */
   const records = [];
   let sampleCount = 0;
@@ -256,7 +323,7 @@ export function bakePhysics(action, project, options = {}) {
       const v = working[pid];
       if (!Number.isFinite(v)) continue;
       records.push({
-        rnaPath: `objects["__params__"].values["${pid}"]`,
+        rnaPath: rnaPathByParamId.get(pid) ?? `objects["__params__"].values["${pid}"]`,
         time: t,
         value: v,
       });
@@ -306,9 +373,20 @@ export function applyBakePhysics(project, actionId, options) {
 
   // Clear any pre-existing fcurves whose rnaPath targets a baked
   // output. Bake is destructive on those by design (see header).
-  const bakedRnaPaths = new Set(result.outputParamIds.map(
-    (pid) => `objects["__params__"].values["${pid}"]`,
-  ));
+  // Bone-output params (ParamRotation_*) now resolve to bone
+  // pose.rotation rnaPaths instead of param paths (see
+  // `resolveBoneIdForParamRotation` docblock above) — collect both
+  // shapes so the destructive clear catches BOTH a previously-baked
+  // param fcurve (legacy bakes from before this fix) AND a previously-
+  // baked bone-rotation fcurve (post-fix bakes). Also clear the
+  // legacy param fcurve for bone outputs so re-baking after the fix
+  // wipes the stale data the gap left behind.
+  const bakedRnaPaths = new Set();
+  for (const pid of result.outputParamIds) {
+    bakedRnaPaths.add(`objects["__params__"].values["${pid}"]`);
+    const boneId = resolveBoneIdForParamRotation(project, pid);
+    if (boneId) bakedRnaPaths.add(`objects["${boneId}"].pose.rotation`);
+  }
   action.fcurves = action.fcurves.filter((fc) => !bakedRnaPaths.has(fc?.rnaPath));
 
   let keysWritten = 0;
