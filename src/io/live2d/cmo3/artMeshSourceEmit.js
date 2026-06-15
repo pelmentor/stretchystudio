@@ -63,7 +63,7 @@ import { computeClosedVertsForMesh } from './eyeClosureApply.js';
 import { resolveMaskPairings } from './maskResolve.js';
 import { EYE_PART_TAGS } from './eyeTags.js';
 import { bakeBoneRotationLBS } from '../rig/bakeBoneRotation.js';
-import { buildVariantProductGridCorners } from '../rig/variantFadeGrid.js';
+import { buildVariantProductGridCorners, buildEyeCompoundBaseGridCorners } from '../rig/variantFadeGrid.js';
 
 /**
  * Emit one CArtMeshSource per mesh and populate `rigCollector.artMeshes`.
@@ -532,26 +532,53 @@ export function emitArtMeshSources(ctx, opts) {
         });
       }
       if (pm.hasEyeVariantCompound) {
-        // 4 corners: row-major (closure, variant) matching cornersOrder above.
-        // Base eye: alpha=1 at variant=0, 0 at variant=1. Variant eye: reverse.
-        const αN = pm.isVariant ? 0 : 1;
-        const αV = pm.isVariant ? 1 : 0;
-        const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '4' });
-        emitArtMeshForm(kfList, pm.pidCornerClosedNeutral, closedVerts, αN);
-        emitArtMeshForm(kfList, pm.pidCornerOpenNeutral,   verts,       αN);
-        emitArtMeshForm(kfList, pm.pidCornerClosedVariant, closedVerts, αV);
-        emitArtMeshForm(kfList, pm.pidCornerOpenVariant,   verts,       αV);
-
         const closureParamIdStr = pm.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
-        const sfxLocal = pm.isVariant ? pm.variantSuffixForMesh : pm.baseFadeSuffix;
-        const variantParamIdStr = sfxLocal ? variantParamId(sfxLocal) : null;
-        if (variantParamIdStr) {
-          artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
-          artBindings.push({ parameterId: variantParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
-          artKeyforms.push({ keyTuple: [0, 0], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αN });
-          artKeyforms.push({ keyTuple: [1, 0], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αN });
-          artKeyforms.push({ keyTuple: [0, 1], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αV });
-          artKeyforms.push({ keyTuple: [1, 1], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αV });
+        if (pm.isVariant) {
+          // VARIANT eye: 2D (closure × ownSuffix). αN=0 at variant=0 (hidden),
+          // αV=1 at variant=1 (visible) — fades IN on its own param. Unchanged.
+          const αN = 0, αV = 1;
+          const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '4' });
+          emitArtMeshForm(kfList, pm.pidCornerClosedNeutral, closedVerts, αN);
+          emitArtMeshForm(kfList, pm.pidCornerOpenNeutral,   verts,       αN);
+          emitArtMeshForm(kfList, pm.pidCornerClosedVariant, closedVerts, αV);
+          emitArtMeshForm(kfList, pm.pidCornerOpenVariant,   verts,       αV);
+
+          const variantParamIdStr = pm.variantSuffixForMesh ? variantParamId(pm.variantSuffixForMesh) : null;
+          if (variantParamIdStr) {
+            artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+            artBindings.push({ parameterId: variantParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+            artKeyforms.push({ keyTuple: [0, 0], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αN });
+            artKeyforms.push({ keyTuple: [1, 0], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αN });
+            artKeyforms.push({ keyTuple: [0, 1], vertexPositions: new Float32Array(toRigFrame(closedVerts)), opacity: αV });
+            artKeyforms.push({ keyTuple: [1, 1], vertexPositions: new Float32Array(toRigFrame(verts)),       opacity: αV });
+          }
+        } else {
+          // BASE eye: (closure × N-variant) product grid. Geometry varies on
+          // closure only (closed/open); opacity = ∏(1 - Param<Suffix>), so the
+          // base hides for EVERY paired variant. For N=1, identical to the old
+          // 4-corner 2D base. See `feedback_variant_base_fade_multi_suffix`.
+          const suffixes = pm.baseFadeSuffixes ?? (pm.baseFadeSuffix ? [pm.baseFadeSuffix] : []);
+          const corners = buildEyeCompoundBaseGridCorners(suffixes.length);
+          const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: String(corners.length) });
+          for (let ci = 0; ci < corners.length; ci++) {
+            const c = corners[ci];
+            const geom = c.geometry === 'closed' ? closedVerts : verts;
+            emitArtMeshForm(kfList, pm.eyeCompoundBaseCornerFormGuids[ci], geom, c.opacity);
+          }
+          if (suffixes.length > 0) {
+            artBindings.push({ parameterId: closureParamIdStr, keys: [0, 1], interpolation: 'LINEAR' });
+            for (const sfx of suffixes) {
+              artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
+            }
+            for (const c of corners) {
+              const geom = c.geometry === 'closed' ? closedVerts : verts;
+              artKeyforms.push({
+                keyTuple: [c.closureKey, ...c.keyIndices],
+                vertexPositions: new Float32Array(toRigFrame(geom)),
+                opacity: c.opacity,
+              });
+            }
+          }
         }
       } else {
         // Standalone 1D closure: 2 keyforms [closed, open].

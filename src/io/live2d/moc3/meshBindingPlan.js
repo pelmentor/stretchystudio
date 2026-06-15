@@ -47,7 +47,7 @@
 import { variantParamId } from '../../psdOrganizer.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { sanitisePartName } from '../../../lib/partId.js';
-import { buildVariantProductGridCorners } from '../rig/variantFadeGrid.js';
+import { buildVariantProductGridCorners, buildEyeCompoundBaseGridCorners } from '../rig/variantFadeGrid.js';
 
 /**
  * @typedef {Object} MeshBindingPlanEntry
@@ -177,28 +177,22 @@ export function buildMeshBindingPlan(opts) {
     // still VISIBLE"). Compound branch fixes both: base alpha goes to 0
     // at variant=1 AND variant still blinks via its own closed verts.
     if (eyeClosure && eyeClosure.closureSide) {
-      const compoundSuffix = variantSuffix ?? (!isBackdrop ? baseFadeSuffix : null);
-      if (compoundSuffix) {
-        const variantParam = variantParamId(compoundSuffix);
+      const closureParam = eyeClosure.closureSide === 'l' ? 'ParamEyeLOpen' : 'ParamEyeROpen';
+      const verts = mesh.vertices;
+      const restPositions = new Float32Array(verts.length * 2);
+      const closedPositions = new Float32Array(verts.length * 2);
+      const closedCanvas = eyeClosure.closedCanvasVerts;
+      for (let i = 0; i < verts.length; i++) {
+        restPositions[i * 2]     = verts[i].x;
+        restPositions[i * 2 + 1] = verts[i].y;
+        closedPositions[i * 2]     = closedCanvas[i * 2];
+        closedPositions[i * 2 + 1] = closedCanvas[i * 2 + 1];
+      }
+      if (variantSuffix) {
+        // VARIANT eye: 2D (closure × ownSuffix). αN=0 (hidden at variant=0),
+        // αV=1 (visible at variant=1). Row-major, closure fastest. Unchanged.
+        const variantParam = variantParamId(variantSuffix);
         if (variantParam) {
-          const closureParam = eyeClosure.closureSide === 'l'
-            ? 'ParamEyeLOpen' : 'ParamEyeROpen';
-          const verts = mesh.vertices;
-          const restPositions = new Float32Array(verts.length * 2);
-          const closedPositions = new Float32Array(verts.length * 2);
-          const closedCanvas = eyeClosure.closedCanvasVerts;
-          for (let i = 0; i < verts.length; i++) {
-            restPositions[i * 2]     = verts[i].x;
-            restPositions[i * 2 + 1] = verts[i].y;
-            closedPositions[i * 2]     = closedCanvas[i * 2];
-            closedPositions[i * 2 + 1] = closedCanvas[i * 2 + 1];
-          }
-          // BASE eye:    αN=1 (visible when variant=0), αV=0 (hidden when variant=1).
-          // VARIANT eye: αN=0 (hidden when variant=0),  αV=1 (visible when variant=1).
-          const isVariantSide = !!variantSuffix;
-          const aN = isVariantSide ? 0 : 1;
-          const aV = isVariantSide ? 1 : 0;
-          // Row-major (closure, variant) — same order as cmo3 cornersOrder.
           return {
             bindings: [
               { paramId: closureParam, keys: [0, 1] },
@@ -206,11 +200,32 @@ export function buildMeshBindingPlan(opts) {
             ],
             paramId: closureParam,
             keys: [0, 1],
-            keyformOpacities: [aN, aN, aV, aV],
+            keyformOpacities: [0, 0, 1, 1],
             perVertexPositions: [
               closedPositions, restPositions,
               closedPositions, restPositions,
             ],
+          };
+        }
+      } else if (!isBackdrop && baseSuffixes && baseSuffixes.length > 0) {
+        // BASE eye: (closure × N-variant) product grid. Geometry varies on
+        // closure only; opacity = ∏(1 - Param<Suffix>), so the base hides for
+        // EVERY paired variant — not just baseSuffixes[0] (the pre-fix bug
+        // that left 2nd+ variants overlaying the base eye in Cubism). N=1 ⇒
+        // legacy 4-corner 2D. See `feedback_variant_base_fade_multi_suffix`.
+        const fadeSuffixes = baseSuffixes.filter((s) => !!variantParamId(s));
+        if (fadeSuffixes.length > 0) {
+          const corners = buildEyeCompoundBaseGridCorners(fadeSuffixes.length);
+          return {
+            bindings: [
+              { paramId: closureParam, keys: [0, 1] },
+              ...fadeSuffixes.map((s) => ({ paramId: variantParamId(s), keys: [0, 1] })),
+            ],
+            paramId: closureParam,
+            keys: [0, 1],
+            keyformOpacities: corners.map((c) => c.opacity),
+            perVertexPositions: corners.map((c) =>
+              c.geometry === 'closed' ? closedPositions : restPositions),
           };
         }
       }
