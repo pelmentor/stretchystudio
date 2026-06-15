@@ -38,6 +38,7 @@ import { uuid } from '../xmlbuilder.js';
 import { variantParamId } from '../../psdOrganizer.js';
 import { emitMeshFilterGraph, emitMeshTexture } from './meshLayer.js';
 import { computeClosedCanvasVerts } from './eyeClosureApply.js';
+import { buildVariantProductGridCorners } from '../rig/variantFadeGrid.js';
 
 /**
  * @typedef {Object} MeshLayerPrepass
@@ -193,12 +194,20 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
     const basePartVariantSuffixes = !isVariant
       ? (variantSuffixesByBasePartId.get(m.partId) ?? [])
       : [];
-    const baseFadeSuffix = basePartVariantSuffixes[0] ?? null;
+    // ALL paired suffixes with a resolvable variant param — not just [0].
+    // The base must fade when ANY variant is active (opacity = ∏(1-pi)),
+    // baked as an N-D product grid (`buildVariantProductGridCorners`). The
+    // pre-fix single-[0] fade left the 2nd+ variant overlaying the base in
+    // Cubism. See `feedback_variant_base_fade_multi_suffix`.
+    const baseFadeSuffixes = basePartVariantSuffixes.filter(
+      (s) => !!variantParamPidBySuffix.get(s)
+    );
+    const baseFadeSuffix = baseFadeSuffixes[0] ?? null;
     const pidParamForBaseFade = baseFadeSuffix
       ? variantParamPidBySuffix.get(baseFadeSuffix) ?? null
       : null;
     const isBackdrop = backdropTagsSet.has(m.tag);
-    const hasBaseFade = !isVariant && !hasBakedKeyforms && !!pidParamForBaseFade && !isBackdrop;
+    const hasBaseFade = !isVariant && !hasBakedKeyforms && baseFadeSuffixes.length > 0 && !isBackdrop;
 
     // Compound 2D gate: eye mesh with BOTH closure data AND a variant axis.
     // Base eye: has a paired variant sibling → fade on Param<Suffix>.
@@ -231,6 +240,11 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
     let neckCornerFormGuids = null;
     let pidFormVariant = null;
     let pidFormBaseHidden = null;
+    // N-D base-fade product grid: one CFormGuid per corner. Origin (all
+    // variants=0) reuses pidFormMesh (opacity 1); every other corner is a
+    // hidden form (opacity 0, base geometry). For N=1 this is exactly the
+    // legacy 2-form {visible, hidden} layout.
+    let baseFadeCornerFormGuids = null;
     // Compound's 4 corner guids (only when hasEyeVariantCompound). Each is
     // UNIQUE — never reuses pidFormMesh / pidFormBaseHidden / pidFormVariant
     // from the standalone branches. Names carry semantic meaning for logs.
@@ -257,8 +271,15 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
       pidFormVariant = _pidFv;
     }
     if (hasBaseFadeOnly) {
-      const [, _pidBh] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_base_hidden` });
-      pidFormBaseHidden = _pidBh;
+      const corners = buildVariantProductGridCorners(baseFadeSuffixes.length);
+      baseFadeCornerFormGuids = corners.map((c, idx) => {
+        if (c.isOrigin) return pidFormMesh; // opacity 1, base geometry
+        const [, _pid] = x.shared('CFormGuid', { uuid: uuid(), note: `${meshName}_base_hidden_${idx}` });
+        return _pid;
+      });
+      // Keep the legacy single-hidden alias pointing at the first hidden
+      // corner so any incidental reader still resolves (N=1 ⇒ corner 1).
+      pidFormBaseHidden = baseFadeCornerFormGuids[1] ?? null;
     }
 
     if (hasBakedKeyforms) {
@@ -472,40 +493,59 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
       x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
       x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = variantParamIdStr;
     } else if (hasBaseFadeOnly) {
-      // Base mesh with a variant sibling (and not the face-skin backdrop):
-      // 2 keyforms on Param<Suffix> — linear crossfade of the neutral
-      // mesh from opacity 1 at 0 to opacity 0 at 1. The face-skin backdrop
-      // stays at opacity=1 always, so the alpha composite is solid at
-      // every intermediate Param value — no see-through midpoint.
-      //   keyIndex 0 at Smile=0 : pidFormMesh,       opacity 1
-      //   keyIndex 1 at Smile=1 : pidFormBaseHidden, opacity 0
-      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '2' });
-      const emitBaseKog = (keyIndex, formPid) => {
+      // Base mesh with one or more variant siblings (and not the face-skin
+      // backdrop): an N-D PRODUCT GRID over every paired Param<Suffix>.
+      // Opacity is 1 only at the all-zero corner and 0 at every other
+      // corner, so Cubism's multilinear interpolation yields opacity =
+      // ∏(1 - Param<Suffix>) — the base hides whenever ANY variant is
+      // active. For N=1 this is the legacy 2-keyform 1→0 crossfade. The
+      // face-skin backdrop stays at opacity=1 (excluded upstream), so the
+      // alpha composite is solid at every intermediate value.
+      // See `feedback_variant_base_fade_multi_suffix`.
+      const corners = buildVariantProductGridCorners(baseFadeSuffixes.length);
+      // One KeyformBindingSource per suffix. Suffix 0 reuses the shared
+      // kfBinding (allocated above for all 1-D branches); 1.. get fresh ones.
+      const bindingNodes = [];
+      const bindingPids = [];
+      for (let s = 0; s < baseFadeSuffixes.length; s++) {
+        if (s === 0) { bindingNodes.push(kfBinding); bindingPids.push(pidKfb); }
+        else {
+          const [bn, bp] = x.shared('KeyformBindingSource');
+          bindingNodes.push(bn); bindingPids.push(bp);
+        }
+      }
+
+      const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: String(corners.length) });
+      for (let ci = 0; ci < corners.length; ci++) {
+        const corner = corners[ci];
         const kog = x.sub(kfog, 'KeyformOnGrid');
         const ak = x.sub(kog, 'KeyformGridAccessKey', { 'xs.n': 'accessKey' });
-        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: '1' });
-        const kon = x.sub(kop, 'KeyOnParameter');
-        x.subRef(kon, 'KeyformBindingSource', pidKfb, { 'xs.n': 'binding' });
-        x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(keyIndex);
-        x.subRef(kog, 'CFormGuid', formPid, { 'xs.n': 'keyformGuid' });
-      };
-      emitBaseKog(0, pidFormMesh);
-      emitBaseKog(1, pidFormBaseHidden);
+        const kop = x.sub(ak, 'array_list', { 'xs.n': '_keyOnParameterList', count: String(baseFadeSuffixes.length) });
+        for (let s = 0; s < baseFadeSuffixes.length; s++) {
+          const kon = x.sub(kop, 'KeyOnParameter');
+          x.subRef(kon, 'KeyformBindingSource', bindingPids[s], { 'xs.n': 'binding' });
+          x.sub(kon, 'i', { 'xs.n': 'keyIndex' }).text = String(corner.keyIndices[s]);
+        }
+        x.subRef(kog, 'CFormGuid', baseFadeCornerFormGuids[ci], { 'xs.n': 'keyformGuid' });
+      }
 
-      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: '1' });
-      x.subRef(kb, 'KeyformBindingSource', pidKfb);
+      const kb = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformBindings', count: String(baseFadeSuffixes.length) });
+      for (const bp of bindingPids) x.subRef(kb, 'KeyformBindingSource', bp);
 
-      const baseParamIdStr = variantParamId(baseFadeSuffix);
-      x.subRef(kfBinding, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
-      x.subRef(kfBinding, 'CParameterGuid', pidParamForBaseFade, { 'xs.n': 'parameterGuid' });
-      const keys = x.sub(kfBinding, 'array_list', { 'xs.n': 'keys', count: '2' });
-      x.sub(keys, 'f').text = '0.0';
-      x.sub(keys, 'f').text = '1.0';
-      x.sub(kfBinding, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
-      x.sub(kfBinding, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
-      x.sub(kfBinding, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
-      x.sub(kfBinding, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
-      x.sub(kfBinding, 's', { 'xs.n': 'description' }).text = baseParamIdStr;
+      for (let s = 0; s < baseFadeSuffixes.length; s++) {
+        const sfx = baseFadeSuffixes[s];
+        const node = bindingNodes[s];
+        x.subRef(node, 'KeyformGridSource', pidKfgMesh, { 'xs.n': '_gridSource' });
+        x.subRef(node, 'CParameterGuid', variantParamPidBySuffix.get(sfx), { 'xs.n': 'parameterGuid' });
+        const keys = x.sub(node, 'array_list', { 'xs.n': 'keys', count: '2' });
+        x.sub(keys, 'f').text = '0.0';
+        x.sub(keys, 'f').text = '1.0';
+        x.sub(node, 'InterpolationType', { 'xs.n': 'interpolationType', v: 'LINEAR' });
+        x.sub(node, 'ExtendedInterpolationType', { 'xs.n': 'extendedInterpolationType', v: 'LINEAR' });
+        x.sub(node, 'i', { 'xs.n': 'insertPointCount' }).text = '1';
+        x.sub(node, 'f', { 'xs.n': 'extendedInterpolationScale' }).text = '1.0';
+        x.sub(node, 's', { 'xs.n': 'description' }).text = variantParamId(sfx);
+      }
     } else {
       // Standard single keyform bound to ParamOpacity
       const kfog = x.sub(kfGridMesh, 'array_list', { 'xs.n': 'keyformsOnGrid', count: '1' });
@@ -569,6 +609,7 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
       pidDrawable, pidFormMesh, bakedFormGuids, pidFormClosed,
       neckCornerFormGuids, pidFormVariant,
       pidFormBaseHidden,
+      baseFadeCornerFormGuids,
       // Compound 2D corners (null for non-compound meshes)
       pidCornerOpenNeutral, pidCornerClosedNeutral,
       pidCornerOpenVariant, pidCornerClosedVariant,
@@ -593,6 +634,7 @@ export function emitAllMeshLayersAndKeyforms(ctx, prepass) {
       // rigCollector.artMeshes without recomputing variant pairing.
       variantSuffixForMesh,
       baseFadeSuffix,
+      baseFadeSuffixes,
       partId: m.partId,
     });
   }

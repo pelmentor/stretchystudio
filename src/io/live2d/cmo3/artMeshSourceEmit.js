@@ -63,6 +63,7 @@ import { computeClosedVertsForMesh } from './eyeClosureApply.js';
 import { resolveMaskPairings } from './maskResolve.js';
 import { EYE_PART_TAGS } from './eyeTags.js';
 import { bakeBoneRotationLBS } from '../rig/bakeBoneRotation.js';
+import { buildVariantProductGridCorners } from '../rig/variantFadeGrid.js';
 
 /**
  * Emit one CArtMeshSource per mesh and populate `rigCollector.artMeshes`.
@@ -658,19 +659,30 @@ export function emitArtMeshSources(ctx, opts) {
         artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 1.0 });
       }
     } else if (pm.hasBaseFadeOnly) {
-      // 2 forms matching the 2-keyform linear fade on Param<Suffix>:
-      //   [0] Smile=0 : opacity 1 (fully visible at rest)
-      //   [1] Smile=1 : opacity 0 (fully gone — variant has taken over)
-      // Same base geometry at both keyforms; only opacity differs.
-      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: '2' });
-      emitArtMeshForm(kfList, pm.pidFormMesh,       verts, 1.0); // keyIndex 0
-      emitArtMeshForm(kfList, pm.pidFormBaseHidden, verts, 0.0); // keyIndex 1
-
-      const sfx = pm.baseFadeSuffix;
-      if (sfx) {
-        artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
-        artKeyforms.push({ keyTuple: [0], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 1.0 });
-        artKeyforms.push({ keyTuple: [1], vertexPositions: new Float32Array(toRigFrame(verts)), opacity: 0.0 });
+      // N-D base-fade PRODUCT GRID — one axis per paired Param<Suffix>.
+      // Opacity is 1 only at the all-zero corner and 0 at every other
+      // corner; the same base geometry at each corner. Multilinear interp
+      // (depgraph + Cubism) then gives opacity = ∏(1 - Param<Suffix>), so
+      // the base hides whenever ANY variant is active. For N=1 this is the
+      // legacy 2-keyform 1→0 fade. Mirrors meshLayerKeyform's hasBaseFadeOnly.
+      // See `feedback_variant_base_fade_multi_suffix`.
+      const suffixes = pm.baseFadeSuffixes ?? (pm.baseFadeSuffix ? [pm.baseFadeSuffix] : []);
+      const corners = buildVariantProductGridCorners(suffixes.length);
+      const kfList = x.sub(meshSrc, 'carray_list', { 'xs.n': 'keyforms', count: String(corners.length) });
+      for (let ci = 0; ci < corners.length; ci++) {
+        emitArtMeshForm(kfList, pm.baseFadeCornerFormGuids[ci], verts, corners[ci].opacity);
+      }
+      if (suffixes.length > 0) {
+        for (const sfx of suffixes) {
+          artBindings.push({ parameterId: variantParamId(sfx), keys: [0, 1], interpolation: 'LINEAR' });
+        }
+        for (const corner of corners) {
+          artKeyforms.push({
+            keyTuple: corner.keyIndices.slice(), // 0/1 per suffix axis (= param value)
+            vertexPositions: new Float32Array(toRigFrame(verts)),
+            opacity: corner.opacity,
+          });
+        }
       }
     } else {
       // Single keyform at rest position

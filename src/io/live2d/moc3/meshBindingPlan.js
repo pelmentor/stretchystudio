@@ -47,6 +47,7 @@
 import { variantParamId } from '../../psdOrganizer.js';
 import { matchTag } from '../../armatureOrganizer.js';
 import { sanitisePartName } from '../../../lib/partId.js';
+import { buildVariantProductGridCorners } from '../rig/variantFadeGrid.js';
 
 /**
  * @typedef {Object} MeshBindingPlanEntry
@@ -253,16 +254,23 @@ export function buildMeshBindingPlan(opts) {
         };
       }
     }
-    // Base mesh with paired variant sibling but no closure data — fade
-    // out 1→0 on the variant's param. Backdrop tags skip this (substrate
-    // guarantee).
-    if (baseFadeSuffix && !isBackdrop) {
-      const pid = variantParamId(baseFadeSuffix);
-      if (pid) {
+    // Base mesh with one or more paired variant siblings but no closure
+    // data — fade out on ALL of them via an N-D product grid (opacity 1
+    // only when every Param<Suffix>=0). Multilinear interp gives
+    // opacity = ∏(1 - Param<Suffix>), so the base hides whenever ANY
+    // variant is active — not just the first (the pre-fix `[0]` bug that
+    // left 2nd+ variants overlaying the base in Cubism). Backdrop tags
+    // skip this (substrate guarantee). N=1 ⇒ legacy [1,0] 1-D fade.
+    // See `feedback_variant_base_fade_multi_suffix`.
+    if (baseSuffixes && baseSuffixes.length > 0 && !isBackdrop) {
+      const fadeSuffixes = baseSuffixes.filter((s) => !!variantParamId(s));
+      if (fadeSuffixes.length > 0) {
+        const corners = buildVariantProductGridCorners(fadeSuffixes.length);
         return {
-          paramId: pid,
+          bindings: fadeSuffixes.map((s) => ({ paramId: variantParamId(s), keys: [0, 1] })),
+          paramId: variantParamId(fadeSuffixes[0]), // back-compat first-binding mirror
           keys: [0, 1],
-          keyformOpacities: [1, 0],
+          keyformOpacities: corners.map((c) => c.opacity),
           perVertexPositions: null,
         };
       }
