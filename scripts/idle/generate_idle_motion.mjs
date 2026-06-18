@@ -16,12 +16,13 @@
 //   --duration <seconds>  Total motion duration (default: 8.0, sane range 4..15)
 //   --fps <n>             Recorded fps in Meta (default: 30)
 //   --personality <name>  calm | energetic | tired | nervous | confident (default: calm)
-//   --seed <int>          Deterministic seed (default: 1)
+//   --seed <int>          Deterministic seed (default: random each run, printed for pinning)
 //   --register            Append generated motion(s) to model3.json's Motions block
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join, basename, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { randomInt } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUILDER_PATH = resolve(HERE, '..', '..', 'src', 'io', 'live2d', 'idle', 'builder.js');
@@ -79,7 +80,10 @@ function parseArgs(argv) {
   // duration: null means "let each preset pick its sensible default (3.5s
   // for hold/look-* presets, 8.0s for loop presets)". Set explicitly with
   // --duration to override.
-  const args = { _: [], duration: null, fps: 30, personality: 'calm', seed: 1, register: false, presets: [] };
+  // seed: null means "not specified → pick a fresh RANDOM seed in main() so
+  // every generation differs". Pass --seed N for a reproducible result (the
+  // chosen seed is always printed so a good one can be pinned).
+  const args = { _: [], duration: null, fps: 30, personality: 'calm', seed: null, register: false, presets: [] };
   let i = 0;
   while (i < argv.length) {
     const a = argv[i];
@@ -181,7 +185,7 @@ Options:
   --duration <seconds>   Motion duration (default: 3.5 for hold, 8.0 for loop)
   --fps <n>              Meta.Fps (default: 30)
   --personality <name>   ${PERSONALITY_PRESETS.join(' | ')} (default: calm)
-  --seed <int>           Deterministic seed (default: 1)
+  --seed <int>           Deterministic seed (default: random each run — printed so you can pin it)
   --register             Append motion(s) to model3.json's Motions block
   -h, --help             This help.
 `);
@@ -214,6 +218,11 @@ async function main() {
     console.error(`Invalid --duration ${args.duration} (must be 1..60)`);
     process.exit(1);
   }
+
+  // Random seed by default so each generation breathes/wanders differently;
+  // --seed N pins it. Print which was used either way (see per-preset summary).
+  const seedWasRandom = !Number.isFinite(args.seed);
+  if (seedWasRandom) args.seed = randomInt(1, 0x7fffffff);
 
   const presets = resolvePresets(args.presets);
   const model3 = JSON.parse(readFileSync(model3Path, 'utf8'));
@@ -280,7 +289,7 @@ async function main() {
     const m = result.motion3.Meta;
     console.log(`[OK ${preset}] ${basename(outPath)}`);
     console.log(`     ${m.Duration}s @ ${m.Fps}fps, ${m.CurveCount} curves, ${m.TotalSegmentCount} segments`);
-    console.log(`     personality=${args.personality} seed=${args.seed}`);
+    console.log(`     personality=${args.personality} seed=${args.seed}${seedWasRandom ? ' (random — pass --seed ' + args.seed + ' to reproduce)' : ''}`);
     console.log(`     animated: ${result.animatedIds.join(', ')}`);
   }
 

@@ -48,7 +48,7 @@ Options:
 | `--duration N` | `8.0` | Loop duration in seconds (4..15) |
 | `--fps N` | `30` | Recorded `Meta.Fps` |
 | `--personality NAME` | `calm` | One of: `calm`, `energetic`, `tired`, `nervous`, `confident` |
-| `--seed N` | `1` | PRNG seed — same seed → same motion |
+| `--seed N` | random each run | PRNG seed — drives breath rate/depth + wander/blink. Omit for a fresh variation every run (the chosen seed is printed so you can pin it); pass `N` to reproduce one |
 | `--register` | off | Append motion(s) to `model3.json`'s `Motions` block under each preset's group |
 
 Examples:
@@ -144,6 +144,6 @@ If you need a motion shape the existing 6 generators don't cover (e.g. wave/jump
 
 - **No expression / mood inflection beyond the 5 personalities.** Personality multiplies amplitudes/periods. For radically different feel, define a new preset.
 - **No "look at object" wander biasing.** Wander is unbiased noise. To bias, use `sine` with `mid` set instead, or override per-param config.
-- **Single seed per preset per export.** For runtime variety, generate twice with different seeds and let SDK rotate.
+- **Random seed per run by default.** Each generation gets a fresh seed → different breath rate/depth and wander, so no two characters (or re-rolls) breathe in lockstep. Pin `--seed N` to reproduce a variation you liked; the seed used is always printed. For runtime variety, generate twice and let the SDK rotate.
 - **Linear segments mostly.** Most curves are linear at high sample density. Burst events use `ease-in-out` easing (encodes as bezier).
 - **Wave / point / arm gestures NOT included.** Auto-rig drives `ParamRotation_*Elbow` via physics; motion targeting them would conflict. Out of scope for now.

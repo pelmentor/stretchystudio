@@ -11,7 +11,7 @@
 import {
   genConstant, genSine, genWander, genBlink, genBurst, genSyllables,
   genPoseHold,
-  clampKeyframes, applyPersonality,
+  clampKeyframes, applyPersonality, makeRng,
 } from './motionLib.js';
 import {
   getPresetTable, isImplicitlySkipped, PRESETS, PRESET_NAMES,
@@ -73,6 +73,26 @@ const VALID_PERSONALITIES = new Set(PERSONALITY_PRESETS);
 
 function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
   const cfg = applyPersonality({ ...def.cfg }, personality);
+
+  // Per-seed PHENOTYPE jitter for analytic sines (breath, body sway, brows).
+  // `genSine` is deterministic on its cfg, so WITHOUT this every model breathes
+  // at the IDENTICAL rate and depth no matter the seed — the breath cfg is a
+  // hardcoded constant shared by every preset. (wander/blink/burst already
+  // consume the seed, so only the sines were frozen.) Give each (seed, param)
+  // its own breathing constitution: jitter the period (RATE) and amplitude
+  // (STRENGTH), plus a small phase offset so multiple characters on screen
+  // don't inhale in lockstep. Deterministic in the seed — a pinned --seed still
+  // reproduces exactly — and applied BEFORE the amplitude pre-clamp below so
+  // peaks stay inside the param bounds. `mid` is left untouched so pose-holding
+  // presets (look-*, embarrassed) keep their authored offset; only the
+  // oscillation around it varies.
+  if (def.kind === 'sine') {
+    const ph = makeRng(seed * 53 + hashCode(paramId) * 7 + 1);
+    const jitter = (spread) => 1 + (ph() * 2 - 1) * spread;
+    if (typeof cfg.period === 'number')    cfg.period    *= jitter(0.22);   // ±22 % rate
+    if (typeof cfg.amplitude === 'number') cfg.amplitude *= jitter(0.20);   // ±20 % strength
+    if (typeof cfg.phase === 'number')     cfg.phase     += (ph() * 2 - 1) * 0.5; // ±0.5 rad desync
+  }
 
   // Pre-clamp amplitude so generated peaks/troughs land STRICTLY inside
   // [defaultMin, defaultMax]. Otherwise a personality multiplier (e.g.

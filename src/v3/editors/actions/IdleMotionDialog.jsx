@@ -19,8 +19,8 @@
  * @module v3/editors/actions/IdleMotionDialog
  */
 
-import { useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Sparkles, Dices } from 'lucide-react';
 import * as DialogImpl from '../../../components/ui/dialog.jsx';
 import * as ButtonImpl from '../../../components/ui/button.jsx';
 import * as LabelImpl from '../../../components/ui/label.jsx';
@@ -53,6 +53,11 @@ const { Label } = Lbl;
 const { Input } = Inp;
 const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } = Sel;
 
+/** A fresh seed in [1, 99999] (matches the Seed input's range). */
+function randomSeed() {
+  return 1 + Math.floor(Math.random() * 99999);
+}
+
 /**
  * @param {{open: boolean, onOpenChange: (b: boolean) => void}} props
  */
@@ -61,7 +66,15 @@ export function IdleMotionDialog({ open, onOpenChange }) {
   const [personality, setPersonality] = useState('calm');
   const [durationSec, setDurationSec] = useState(8);
   const [fps, setFps] = useState(30);
-  const [seed, setSeed] = useState(1);
+  // Random seed by default so each generated idle breathes / wanders
+  // differently — a fixed default made every model breathe at the same rate
+  // and strength. The 🎲 button next to the field rerolls; type a number to
+  // pin a variation you like.
+  const [seed, setSeed] = useState(() => randomSeed());
+  // Reroll the seed each time the dialog opens so successive generations vary
+  // by default (the user can still type a fixed seed to reproduce one).
+  useEffect(() => { if (open) setSeed(randomSeed()); }, [open]);
+
   // User-typed motion name. Empty = use the auto-suggested name derived
   // from preset+personality (shown as the input's placeholder).
   const [name, setName] = useState('');
@@ -289,14 +302,25 @@ export function IdleMotionDialog({ open, onOpenChange }) {
 
           <div className="grid grid-cols-3 items-center gap-3">
             <Label htmlFor="idle-seed">Seed</Label>
-            <Input
-              id="idle-seed"
-              className="col-span-2"
-              type="number"
-              min={1} max={99999} step={1}
-              value={seed}
-              onChange={(e) => setSeed(Math.max(1, Number(e.target.value) | 0))}
-            />
+            <div className="col-span-2 flex items-center gap-2">
+              <Input
+                id="idle-seed"
+                className="flex-1"
+                type="number"
+                min={1} max={99999} step={1}
+                value={seed}
+                onChange={(e) => setSeed(Math.max(1, Number(e.target.value) | 0))}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                title="Random seed — reroll the breathing rate, depth and wander"
+                onClick={() => setSeed(randomSeed())}
+              >
+                <Dices className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           {error ? (
