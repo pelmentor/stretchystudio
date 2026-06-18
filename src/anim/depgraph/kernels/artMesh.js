@@ -59,7 +59,9 @@
 import { cellSelect } from '../../../io/live2d/runtime/evaluator/cellSelect.js';
 import { evalWarpKernelCubism } from '../../../io/live2d/runtime/evaluator/cubismWarpEval.js';
 import { applyMat3ToPoint } from '../../../io/live2d/runtime/evaluator/rotationEval.js';
-import { applyBonePostChainSkin } from './bonePostChain.js';
+import { applyBonePostChainSkin, resolveBoneWorldFromCtx } from './bonePostChain.js';
+import { pickBonePostChainComposition } from '../../../renderer/bonePostChainComposition.js';
+import { logger } from '../../../lib/logger.js';
 import {
   modifierRefId,
   getWarpRestGrid,
@@ -377,6 +379,14 @@ export function kernelArtMeshEval(op, ctx) {
   applyBonePostChainSkin(part, mesh ?? null, bufA, ctx, byId, boneWorldCache);
   captureBbox('post-applyBonePostChainSkin');
 
+  // DISAPPEAR DIAGNOSTIC — fire when this part's FINAL eval verts land
+  // NaN / collapsed-to-a-point / far off-canvas ("the part vanished").
+  // Dumps the exact state that produced it — modifier stack, composition
+  // decision, jointBone WORLD matrix + pose, and the frame source — so the
+  // root cause is read off ONE repro instead of theorised. Throttled
+  // module-wide. Per [[invariant-checks-over-user-repro]].
+  _maybeEmitDisappearDiag(part, mesh, bufA, ctx, byId, boneWorldCache, meshState);
+
   if (trace) {
     if (!ctx.artMeshBboxTraceResults) ctx.artMeshBboxTraceResults = new Map();
     ctx.artMeshBboxTraceResults.set(partId, trace);
@@ -388,6 +398,95 @@ export function kernelArtMeshEval(op, ctx) {
     opacity: meshState.opacity,
     drawOrder: meshState.drawOrder,
   };
+}
+
+// Throttle the disappear diagnostic so a vanished part (which re-evals at
+// 60Hz) produces a legible trickle, not a flood. Module-wide; first call in
+// the window wins.
+const _DISAPPEAR_DIAG_THROTTLE_MS = 1500;
+// -Infinity (not 0) so the FIRST disappearance always logs — otherwise a
+// vanish in the first 1500ms after load (small performance.now()) would be
+// silently throttled away.
+let _lastDisappearDiagAt = -Infinity;
+function _diagNow() {
+  return typeof performance !== 'undefined' ? performance.now() : 0;
+}
+
+/**
+ * Emit a one-shot diagnostic when a part's final eval verts are NaN,
+ * collapsed to a point, or flung far off-canvas — the "part disappeared"
+ * symptom. Captures the full causal state. No-op on healthy frames.
+ *
+ * @param {object} part
+ * @param {object|null} mesh
+ * @param {Float32Array} positions
+ * @param {import('../eval.js').EvalContext} ctx
+ * @param {Map<string, object>} byId
+ * @param {Map<string, Float32Array>} boneWorldCache
+ * @param {{opacity:number}|null} meshState
+ */
+function _maybeEmitDisappearDiag(part, mesh, positions, ctx, byId, boneWorldCache, meshState) {
+  const cw = ctx.project?.canvas?.width ?? 0;
+  const ch = ctx.project?.canvas?.height ?? 0;
+  if (!(cw > 0 && ch > 0) || !positions || positions.length === 0) return;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, nan = false;
+  for (let i = 0; i < positions.length; i += 2) {
+    const x = positions[i], y = positions[i + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { nan = true; continue; }
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  const margin = Math.max(cw, ch) * 2;
+  const offCanvas = !nan && (maxX < -margin || minX > cw + margin || maxY < -margin || minY > ch + margin);
+  const degenerate = !nan && (maxX - minX) < 1e-3 && (maxY - minY) < 1e-3;
+  if (!nan && !offCanvas && !degenerate) return; // healthy — no log
+
+  const t = _diagNow();
+  if (t - _lastDisappearDiagAt < _DISAPPEAR_DIAG_THROTTLE_MS) return;
+  _lastDisappearDiagAt = t;
+
+  const m = mesh ?? part?.mesh ?? null;
+  const decision = pickBonePostChainComposition(part, m);
+  let jointWorld = null, jointPose = null, parentWorld = null;
+  if (decision.kind === 'lbs' && decision.jointBoneId) {
+    try {
+      jointWorld = Array.from(resolveBoneWorldFromCtx(decision.jointBoneId, ctx, byId, boneWorldCache));
+      const jb = byId.get(decision.jointBoneId);
+      jointPose = jb?.pose ?? null;
+      if (decision.parentBoneId) {
+        parentWorld = Array.from(resolveBoneWorldFromCtx(decision.parentBoneId, ctx, byId, boneWorldCache));
+      }
+    } catch { /* defensive — diagnostic must never throw */ }
+  }
+  const rk0 = m?.runtime?.keyforms?.[0]?.vertexPositions;
+  const mv0 = m?.vertices?.[0];
+  const reason = nan ? 'NaN' : degenerate ? 'collapsed-to-point' : 'off-canvas';
+  const decisionReason = 'reason' in decision ? decision.reason : null;
+  logger.warn(
+    'artMeshDisappearDiag',
+    `part "${part?.name ?? part?.id}" eval output ${reason} — `
+    + `modifiers=[${(part?.modifiers ?? []).map((mod) => mod?.type).join(',')}] `
+    + `composition=${decision.kind}${decisionReason ? '/' + decisionReason : ''} `
+    + `bbox=(${minX.toFixed(0)},${minY.toFixed(0)})..(${maxX.toFixed(0)},${maxY.toFixed(0)}) canvas=${cw}x${ch}`,
+    {
+      partId: part?.id, name: part?.name, reason,
+      bbox: { minX, minY, maxX, maxY }, canvas: { cw, ch },
+      composition: decision,
+      modifiers: (part?.modifiers ?? []).map((mod) => ({
+        type: mod?.type, enabled: mod?.enabled, mode: mod?.mode,
+        objectId: mod?.objectId, deformerId: mod?.deformerId,
+        jointBoneId: mod?.data?.jointBoneId, parentBoneId: mod?.data?.parentBoneId,
+      })),
+      meshHasBoneWeights: Array.isArray(m?.boneWeights),
+      boneWeightsLen: Array.isArray(m?.boneWeights) ? m.boneWeights.length : null,
+      meshJointBoneId: m?.jointBoneId ?? null,
+      jointWorld, parentWorld, jointPose,
+      opacity: meshState?.opacity,
+      runtimeKeyformCount: Array.isArray(m?.runtime?.keyforms) ? m.runtime.keyforms.length : null,
+      runtimeKf0XY: rk0 ? [rk0[0], rk0[1]] : null,
+      meshVert0: mv0 ? { x: mv0.x, y: mv0.y } : null,
+    },
+  );
 }
 
 /**
