@@ -373,6 +373,47 @@ function setupArmedHandwear() {
     `Phase 2: re-bind preserves jointBoneId='leftElbow' (got ${decision.jointBoneId})`);
 }
 
+// ── Test 12: off-canvas guard — runaway bake aborts, mesh left intact ─
+// A bad bone matrix / wrong-frame base can produce FINITE but insane verts
+// (mesh flung far off-canvas = "the part disappeared"). The guard must
+// refuse to persist and leave mesh.vertices untouched. Rule №1: never
+// silently destroy geometry. Regression for the 2026-06-18 disappear report.
+
+{
+  setupArmedHandwear();
+  // Runaway translation pose on the joint bone → LBS flings verts far
+  // beyond the 1280² canvas (× the 4× margin guard threshold).
+  useProjectStore.getState().updateProject((p) => {
+    const elbow = p.nodes.find((n) => n.id === 'leftElbow');
+    elbow.pose = { rotation: 0, x: 999999, y: 999999, scaleX: 1, scaleY: 1 };
+  });
+  const before = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices.map((v) => ({ x: v.x, y: v.y }));
+  const result = applyArmatureModifier('handwear-l');
+  assert(result.baked === false, 'Test 12: off-canvas bake → baked=false (aborted)');
+  assert(result.reason === 'lbs-bake-offcanvas' || result.reason === 'lbs-bake-degenerate',
+    `Test 12: reason flags degenerate/off-canvas (got ${result.reason})`);
+  const after = useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').mesh.vertices;
+  assert(after[0].x === before[0].x && after[0].y === before[0].y,
+    'Test 12: mesh.vertices LEFT INTACT after aborted apply (not silently destroyed)');
+  const stillHasArmature = (useProjectStore.getState().project.nodes
+    .find((n) => n.id === 'handwear-l').modifiers ?? []).some((m) => m?.type === 'armature');
+  assert(stillHasArmature, 'Test 12: armature modifier NOT removed on aborted apply');
+}
+
+// ── Test 13: normal pose still bakes (guard does not false-positive) ──
+
+{
+  setupArmedHandwear();
+  useProjectStore.getState().updateProject((p) => {
+    const elbow = p.nodes.find((n) => n.id === 'leftElbow');
+    elbow.pose = { rotation: 30, x: 0, y: 0, scaleX: 1, scaleY: 1 };
+  });
+  const result = applyArmatureModifier('handwear-l');
+  assert(result.baked === true, 'Test 13: ordinary pose bakes (guard no false-positive)');
+}
+
 console.log(`\napplyArmatureModifier: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
   console.log('FAILURES:');

@@ -120,43 +120,53 @@ export function applyArmatureModifier(partId) {
     rigSpec: hasRigSpec ? rigSpec : undefined,
     outBoneWorldMatrices: boneWorld,
   });
+  // The depgraph frame IS the exact viewport geometry for this part — the
+  // kernel already ran the full deformer chain AND `applyBonePostChainSkin`
+  // (two-bone LBS) at the current pose. Baking it verbatim is Blender's
+  // "Apply takes what the viewport shows" (modifier_apply_obdata). When a
+  // frame is available we use it directly and DO NOT re-skin below.
+  //
+  // BUGFIX 2026-06-18: `frame.vertexPositions` is a Float32Array, so the
+  // prior `Array.isArray(...)` gate was ALWAYS false — every Apply silently
+  // fell through to the rest+manual-LBS fallback, which re-derives the pose
+  // instead of consuming the viewport the code's own contract (see header)
+  // promises. For a bone-only part rest+LBS happens to equal the frame, but
+  // for any part carrying additional (chain / param) deformation the two
+  // diverge — and a divergent re-derivation can fling verts off-canvas
+  // ("the arm disappears"). Accept typed arrays via ArrayBuffer.isView.
   let baseVerts;
+  let baseFromFrame = false;
   if (hasRigSpec) {
     const frame = frames.find((f) => f.id === partId) ?? null;
-    if (frame && Array.isArray(frame.vertexPositions) && frame.vertexPositions.length === restVerts.length * 2) {
+    const vp = frame?.vertexPositions;
+    if (vp && (ArrayBuffer.isView(vp) || Array.isArray(vp)) && vp.length === restVerts.length * 2) {
       baseVerts = new Array(restVerts.length);
       for (let i = 0; i < restVerts.length; i++) {
-        baseVerts[i] = {
-          x: frame.vertexPositions[i * 2],
-          y: frame.vertexPositions[i * 2 + 1],
-        };
+        baseVerts[i] = { x: vp[i * 2], y: vp[i * 2 + 1] };
       }
-    } else {
-      // No matching frame — part isn't in the rig spec. Fall back to
-      // mesh.vertices (rest). This is correct when the rig hasn't
-      // harvested this part yet.
-      baseVerts = restVerts.map((v) => ({ x: v.x, y: v.y }));
+      baseFromFrame = true;
     }
-  } else {
+  }
+  if (!baseFromFrame) {
+    // No matching frame (unrigged / un-harvested part) — fall back to the
+    // rest verts and skin them manually below.
     baseVerts = restVerts.map((v) => ({ x: v.x, y: v.y }));
   }
 
   // Two-bone LBS using the constraint-aware bone WORLD matrices the
-  // depgraph eval populated above. Same math the viewport runs every
-  // frame in `CanvasViewport.jsx` so the bake is byte-identical to what
-  // the user sees. Applies for both rigid-intent (all-1.0 weights) and
-  // true-skinning parts: in the rigid case the LBS reduces to a uniform
-  // rotation of every vert by the joint bone's world matrix, which
-  // equals the visual at current pose — exactly what we want to bake
-  // into mesh.vertices so the post-Apply rest IS the previously-posed
-  // geometry. When the project has no rig spec the depgraph eval was
-  // skipped and `boneWorld` is empty; that's the unrigged-mesh path and
-  // LBS below short-circuits with null matrices.
+  // depgraph eval populated above. ONLY for the rest-vert fallback — when
+  // baseVerts came from the depgraph frame they are ALREADY skinned (the
+  // kernel ran `applyBonePostChainSkin`), so re-skinning here would DOUBLE
+  // the bone rotation and fling the mesh off-canvas. The rigid-intent
+  // (all-1.0 weights) and true-skinning cases both reduce correctly: the
+  // fallback skins rest→posed; the frame path is posed already.
   const boneParents = computeBoneParentMap(project.nodes);
   const childMatrix = boneWorld.get(jointBoneId) ?? null;
   const parentBoneId = armature.data?.parentBoneId ?? boneParents.get(jointBoneId) ?? null;
   const parentMatrix = parentBoneId ? boneWorld.get(parentBoneId) ?? null : null;
-  applyTwoBoneSkinningObj(baseVerts, parentMatrix, childMatrix, partWeights);
+  if (!baseFromFrame) {
+    applyTwoBoneSkinningObj(baseVerts, parentMatrix, childMatrix, partWeights);
+  }
 
   // NaN guard — degenerate bone matrices (zero scale, infinite values)
   // propagate NaN through `applyTwoBoneSkinningObj` and would corrupt
@@ -171,6 +181,48 @@ export function applyArmatureModifier(partId) {
           x: baseVerts[i].x, y: baseVerts[i].y },
       );
       return { baked: false, vertCount: 0, reason: 'lbs-bake-nan' };
+    }
+  }
+
+  // Off-canvas / degenerate guard (extends the NaN guard). A bad bone
+  // matrix, wrong-frame base, or double-skin produces FINITE but insane
+  // verts — the mesh lands far off-canvas or collapses to a line/point,
+  // which the user sees as "the part disappeared entirely". The NaN guard
+  // misses these (the numbers are finite). Refuse to persist and surface
+  // the full state so the cause is diagnosable from the Logs panel.
+  // Rule №1: never silently destroy geometry; fail loud, leave mesh intact.
+  {
+    const cw = project?.canvas?.width ?? 0;
+    const ch = project?.canvas?.height ?? 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const v of baseVerts) {
+      if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+    }
+    // Collapse-to-a-POINT only (both extents ~0). NOT a line: thin /
+    // axis-aligned meshes (eyelash strips, etc.) legitimately have one
+    // zero extent and must NOT trip the guard.
+    const degenerate = (maxX - minX) < 1e-3 && (maxY - minY) < 1e-3;
+    // Allow generous slack (4× the larger canvas dimension) — legitimate
+    // poses can push a limb well outside the frame; only a runaway bake
+    // (orders of magnitude off) trips this.
+    const margin = cw > 0 && ch > 0 ? Math.max(cw, ch) * 4 : Infinity;
+    const offCanvas = cw > 0 && ch > 0
+      && (maxX < -margin || minX > cw + margin || maxY < -margin || minY > ch + margin);
+    if (degenerate || offCanvas) {
+      logger.error(
+        'armatureModifierApplyDegenerate',
+        `LBS bake produced ${degenerate ? 'degenerate (collapsed)' : 'off-canvas'} geometry on `
+        + `"${part.name ?? partId}" — Apply aborted, mesh left intact`,
+        {
+          partId, jointBoneId, parentBoneId, baseFromFrame,
+          bbox: { minX, minY, maxX, maxY }, canvas: { cw, ch },
+          childMatrix: childMatrix ? Array.from(childMatrix) : null,
+          parentMatrix: parentMatrix ? Array.from(parentMatrix) : null,
+          weight0: partWeights[0], vertCount: baseVerts.length,
+        },
+      );
+      return { baked: false, vertCount: 0, reason: degenerate ? 'lbs-bake-degenerate' : 'lbs-bake-offcanvas' };
     }
   }
 
