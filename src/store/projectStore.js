@@ -214,6 +214,9 @@ function _onUndoSnapshotEvict(evicted, liveSnapshots, liveRedoStack) {
 setOnEvictCallback(_onUndoSnapshotEvict);
 import { coerceNumberArray } from '../lib/numberArrayCoerce.js';
 import { computeWorldMatrices } from '../renderer/transforms.js';
+import { applyTwoBoneSkinningObj } from '../renderer/boneSkinning.js';
+import { computeBoneParentMap } from '../renderer/boneOverlayMatrix.js';
+import { reprojectBakeToLeafFrame } from '../io/live2d/rig/leafFrameReproject.js';
 
 /**
  * Deep clone an object, preserving TypedArrays.
@@ -1184,114 +1187,90 @@ export const useProjectStore = create((set, get) => {
 
     const worldMap = computeWorldMatrices(nodes);
 
-    // 1. Bake each part's world matrix into its mesh rest verts. The
-    //    world matrix already incorporates every ancestor bone's pose,
-    //    so this captures the cumulative transform in canvas-space.
+    // 1. Bake the posed VIEWPORT geometry into each armature part's rest, then
+    //    keep the rig so the bones still drive the (now neutral-pose) mesh.
+    //    This is Blender's "Apply Pose as Rest Pose": the current pose becomes
+    //    the rest, poses zero, appearance unchanged, mesh still skinned.
     //
-    // # The hasArmatureMod gate (2026-05-09)
+    // # Why two-bone LBS, not the part's single world matrix (2026-06-19)
     //
-    // Post-Cubism-Adapter (Phase 2 — overlay path deleted), only
-    // parts with an active Armature modifier visually follow bone
-    // pose at render time (`CanvasViewport.jsx:817-834` → LBS overlay
-    // when `composition.kind === 'lbs'`). Parts without the modifier
-    // render at chainEval's canvas-px output verbatim — bone pose
-    // doesn't move them. So rebasing their mesh.vertices here would
-    // produce a SILENT visual jump on Apply Pose As Rest (rest now
-    // points to a position the part never visually was).
+    // The viewport skins each part with PER-VERTEX two-bone LBS
+    // (`applyTwoBoneSkinningObj`: weight 0 -> parent bone, weight 1 -> child
+    // bone). The old code here baked via the part's single WORLD matrix applied
+    // uniformly to every vert — which rotates weight-0 verts that the viewport
+    // leaves at rest. Result: the mesh JUMPED on Apply Pose as Rest (~13px on a
+    // bent limb; reproduced). Bake with the exact same two-bone LBS so the
+    // baked rest == what the user sees, and zeroing the pose below leaves the
+    // appearance untouched.
     //
-    // The gate also fixes the Apply Modifier → Apply Pose As Rest
-    // composition: post-Apply parts have already absorbed the pose
-    // into mesh.vertices (LBS bake) AND have their modifier removed.
-    // Step 1 without the gate would re-rotate them by the still-
-    // non-zero parent bone pose, producing a double-rotated rest.
-    // Same gate as Step 1b below (which already had this fix for the
-    // bone-baked-keyform code path).
+    // # The hasArmatureMod gate
+    //
+    // Only parts with an active Armature modifier follow bone pose at render
+    // time; rebasing a non-armature part would jump it to a position it never
+    // visually was. Post-Apply-Modifier parts (modifier removed) are also
+    // skipped — their pose is already baked into mesh.vertices.
     let bakedAnything = false;
-    for (const n of nodes) {
-      const nMesh = getMesh(n, project);
-      if (!isMeshedPart(n, project) || !nMesh || !Array.isArray(nMesh.vertices)) continue;
-      const hasArmatureMod = Array.isArray(n.modifiers)
-        && n.modifiers.some((mod) => mod?.type === 'armature' && mod.enabled !== false);
-      if (!hasArmatureMod) continue;
-      const m = worldMap.get(n.id);
-      if (!m) continue;
-      // Skip if the matrix is identity — nothing to bake on this part.
-      const isIdentity =
-           Math.abs(m[0] - 1) < 1e-6 && Math.abs(m[1])     < 1e-6
-        && Math.abs(m[3])     < 1e-6 && Math.abs(m[4] - 1) < 1e-6
-        && Math.abs(m[6])     < 1e-6 && Math.abs(m[7])     < 1e-6;
-      if (isIdentity) continue;
-      for (const v of nMesh.vertices) {
-        if (!v) continue;
-        const rx = (typeof v.restX === 'number') ? v.restX : v.x;
-        const ry = (typeof v.restY === 'number') ? v.restY : v.y;
-        const nx = m[0] * rx + m[3] * ry + m[6];
-        const ny = m[1] * rx + m[4] * ry + m[7];
-        v.restX = nx;
-        v.restY = ny;
-        v.x     = nx;
-        v.y     = ny;
-      }
-      bakedAnything = true;
-    }
-
-    // 1b. Replace `mesh.runtime` with a minimal canvas-px entry on
-    //     armature-mod parts whose mesh.vertices Step 1 just rebased.
-    //
-    // 2026-05-09 (afternoon): an earlier version of this code did a
-    // linear-only in-place bake (`vp[i] = m0*x + m3*y`) which assumed
-    // keyforms were in joint-bone-pivot-relative frame — they're
-    // actually in PARENT-DEFORMER-LOCAL frame (see
-    // `selectRigSpec._buildArtMeshes` frame-conversion logic — the
-    // warp/rotation/canvas branches under "Frame-convert canvas-px
-    // verts → parent-deformer-local"). Linear-only is correct only when
-    // the parent deformer's pivot coincides with the joint bone's
-    // pivot (limb case). For non-limb rigid-intent parts (handwear,
-    // face-region under a non-coincident parent), the formula rotated
-    // around the wrong center.
-    //
-    // The very next iteration tried `delete meshN.runtime` so
-    // `selectRigSpec`'s pre-rig fallback would regenerate. But that
-    // path frame-converts the rebased canvas-px verts into the
-    // warp's [0..1] normalised space using the warp's REST bbox —
-    // posed verts can land far outside [0..1], producing the
-    // user-reported "arm disappears" bug.
-    //
-    // Structurally correct fix (same as `applyArmatureModifier`
-    // 2026-05-09): write a minimal runtime entry with `parent=root`
-    // and a single rest keyform holding the baked canvas-px verts
-    // verbatim. selectRigSpec's runtime-cache fast path emits them
-    // directly with no frame conversion. Multi-angle bone-baked
-    // keyforms collapse to 1 — Apply Pose As Rest is destructive
-    // (the user's choice to bake the pose into rest), so per-slider
-    // animation curves are intentionally lost; recover via
-    // re-Init-Rig.
+    const boneParents = computeBoneParentMap(nodes);
     for (const n of nodes) {
       if (n.type !== 'part') continue;
-      const meshN = getMesh(n, project);
-      if (!meshN || !meshN.runtime) continue;
-      const hasArmatureMod = Array.isArray(n.modifiers)
-        && n.modifiers.some((m) => m?.type === 'armature' && m.enabled !== false);
-      if (!hasArmatureMod) continue;
-      const verts = Array.isArray(meshN.vertices) ? meshN.vertices : null;
-      if (!verts || verts.length === 0) continue;
-      const flat = new Array(verts.length * 2);
-      for (let i = 0; i < verts.length; i++) {
-        flat[i * 2]     = verts[i].x;
-        flat[i * 2 + 1] = verts[i].y;
+      const nMesh = getMesh(n, project);
+      if (!isMeshedPart(n, project) || !nMesh || !Array.isArray(nMesh.vertices)) continue;
+      const armMod = Array.isArray(n.modifiers)
+        ? n.modifiers.find((mod) => mod?.type === 'armature' && mod.enabled !== false)
+        : null;
+      if (!armMod) continue;
+      const weights = Array.isArray(nMesh.boneWeights) ? nMesh.boneWeights : null;
+      const jointBoneId = armMod.data?.jointBoneId ?? nMesh.jointBoneId ?? null;
+      if (!weights || !jointBoneId || weights.length < nMesh.vertices.length) continue;
+      const parentBoneId = armMod.data?.parentBoneId ?? boneParents.get(jointBoneId) ?? null;
+      const childW  = worldMap.get(jointBoneId) ?? null;
+      const parentW = parentBoneId ? worldMap.get(parentBoneId) ?? null : null;
+
+      // Skin REST verts -> posed canvas with the viewport's two-bone LBS.
+      const posed = nMesh.vertices.map((v) => ({
+        x: (typeof v.restX === 'number') ? v.restX : v.x,
+        y: (typeof v.restY === 'number') ? v.restY : v.y,
+      }));
+      applyTwoBoneSkinningObj(posed, parentW, childW, weights);
+
+      // NaN guard — a degenerate bone matrix must not corrupt the rest.
+      let bad = false;
+      for (const v of posed) { if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) { bad = true; break; } }
+      if (bad) {
+        logger.error('applyPoseAsRest',
+          `LBS bake produced non-finite verts on "${n.name ?? n.id}" — skipped (rest left intact)`,
+          { partId: n.id, jointBoneId, parentBoneId });
+        continue;
       }
-      // M3.3 (RULE-№4, 2026-05-23): `runtime.parent` is no longer
-      // persisted — the chain leaf is derived from `part.modifiers[0]`
-      // (selectRigSpec) and project topology (synthesizeModifierStacks
-      // via `findInnermostBodyWarpId`). v47 migration strips the field
-      // from any pre-M3.3 save on load.
-      meshN.runtime = {
+
+      // Reproject the posed canvas verts into the leaf modifier's local frame
+      // (shared with Apply Armature) BEFORE overwriting — the kept deformer
+      // chain re-applies the keyform, so writing canvas-px on a warp leaf would
+      // fly the part off-canvas (the "arm disappears" frame bug). Helper reads
+      // the OLD rest correspondence to recover the affine map.
+      const reproj = reprojectBakeToLeafFrame(n, nMesh, posed);
+      if (!reproj.ok || !reproj.keyformVerts) {
+        logger.error('applyPoseAsRest',
+          `cannot reproject bake into leaf frame on "${n.name ?? n.id}" — ${reproj.reason}; skipped`,
+          { partId: n.id, reason: reproj.reason });
+        continue;
+      }
+
+      // Write posed canvas into the REST geometry (restX/restY are canonical —
+      // resetToRestPose + export read them; x/y follow).
+      for (let i = 0; i < nMesh.vertices.length; i++) {
+        nMesh.vertices[i].x = posed[i].x;
+        nMesh.vertices[i].y = posed[i].y;
+        nMesh.vertices[i].restX = posed[i].x;
+        nMesh.vertices[i].restY = posed[i].y;
+      }
+      // Collapse the runtime to a single rest keyform in the leaf frame, keeping
+      // bindings empty (per-slider keyforms are intentionally dropped — Apply
+      // Pose as Rest is destructive; recover via re-Init-Rig). The Armature
+      // modifier + boneWeights STAY so the bones keep driving the mesh.
+      nMesh.runtime = {
         bindings: [],
-        keyforms: [{
-          keyTuple: [],
-          vertexPositions: flat,
-          opacity: 1,
-        }],
+        keyforms: [{ keyTuple: [], vertexPositions: reproj.keyformVerts, opacity: 1 }],
       };
       bakedAnything = true;
     }

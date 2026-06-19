@@ -42,76 +42,7 @@ import { computeBoneParentMap } from '../renderer/boneOverlayMatrix.js';
 import { applyTwoBoneSkinningObj } from '../renderer/boneSkinning.js';
 import { logger } from '../lib/logger.js';
 import { getMesh } from '../store/objectDataAccess.js';
-
-/**
- * Least-squares fit of a 2D affine map  out = A·in + t  (6 params) from
- * corresponding flat point arrays. Returns the map plus its max residual on
- * the input pairs, so callers can reject a NON-affine correspondence (a
- * non-uniform deformer grid) instead of silently reprojecting through a bad
- * map.
- *
- * The keyform-frame conversion this powers (canvas-px → deformer-local) is
- * EXACT when the leaf deformer's rest lift is affine — which it is for SS's
- * rig (warp rest grids are built with uniform canvas spacing; a rotation rest
- * map is a rigid transform). The fit recovers that exact map (including cage
- * padding / pivot offset) from the part's OWN rest correspondence, so it
- * round-trips even for posed verts that fall OUTSIDE the rest bbox (a bent
- * limb), where naive bbox-normalisation would extrapolate.
- *
- * @param {number[]|Float32Array} src  flat [x0,y0,x1,y1,...] (input space)
- * @param {number[]|Float32Array} dst  flat, same length (output space)
- * @returns {{ map: (x:number,y:number)=>[number,number], residual: number }|null}
- */
-function _fitAffine2D(src, dst) {
-  const n = src.length >> 1;
-  if (n < 3 || dst.length !== src.length) return null;
-  // Per-output-axis linear least squares against [x, y, 1].
-  let Sxx = 0, Sxy = 0, Sx = 0, Syy = 0, Sy = 0;
-  let Ux = 0, Uy = 0, U1 = 0, Vx = 0, Vy = 0, V1 = 0;
-  for (let i = 0; i < n; i++) {
-    const x = src[2 * i], y = src[2 * i + 1];
-    const u = dst[2 * i], v = dst[2 * i + 1];
-    Sxx += x * x; Sxy += x * y; Sx += x; Syy += y * y; Sy += y;
-    Ux += u * x; Uy += u * y; U1 += u;
-    Vx += v * x; Vy += v * y; V1 += v;
-  }
-  const A = [[Sxx, Sxy, Sx], [Sxy, Syy, Sy], [Sx, Sy, n]];
-  const solve = (b) => {
-    const M = A.map((row, i) => [...row, b[i]]);
-    for (let c = 0; c < 3; c++) {
-      let p = c;
-      for (let r = c + 1; r < 3; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
-      if (Math.abs(M[p][c]) < 1e-12) return null;
-      [M[c], M[p]] = [M[p], M[c]];
-      const d = M[c][c];
-      for (let k = c; k < 4; k++) M[c][k] /= d;
-      for (let r = 0; r < 3; r++) if (r !== c) {
-        const f = M[r][c];
-        for (let k = c; k < 4; k++) M[r][k] -= f * M[c][k];
-      }
-    }
-    return [M[0][3], M[1][3], M[2][3]];
-  };
-  const ax = solve([Ux, Uy, U1]);
-  const ay = solve([Vx, Vy, V1]);
-  if (!ax || !ay) return null;
-  const map = /** @type {(x:number,y:number)=>[number,number]} */ (
-    (x, y) => [ax[0] * x + ax[1] * y + ax[2], ay[0] * x + ay[1] * y + ay[2]]
-  );
-  let residual = 0;
-  for (let i = 0; i < n; i++) {
-    const [u, v] = map(src[2 * i], src[2 * i + 1]);
-    residual = Math.max(residual, Math.hypot(u - dst[2 * i], v - dst[2 * i + 1]));
-  }
-  return { map, residual };
-}
-
-/** Flatten an `{x,y}[]` vertex array to `[x0,y0,x1,y1,...]`. */
-function _flattenObjVerts(verts) {
-  const out = new Array(verts.length * 2);
-  for (let i = 0; i < verts.length; i++) { out[2 * i] = verts[i].x; out[2 * i + 1] = verts[i].y; }
-  return out;
-}
+import { reprojectBakeToLeafFrame } from '../io/live2d/rig/leafFrameReproject.js';
 
 /**
  * Apply the Armature modifier on a part: bake the current visible
@@ -320,58 +251,17 @@ export function applyArmatureModifier(partId) {
   // taken at the current param state. In the Apply workflow the user has posed
   // bones (carried by `bone.pose`, NOT params) with body/face params at rest,
   // so the two coincide and the reprojection is exact.
-  const leafMod = stack.find((m) => m && m.type !== 'armature' && m.enabled !== false
-    && (m.type === 'lattice' || m.type === 'warp' || m.type === 'rotation'));
-  /** @type {number[]} */
-  let keyformVerts;
-  if (leafMod) {
-    const kfs = Array.isArray(mesh?.runtime?.keyforms) ? mesh.runtime.keyforms : null;
-    const restKf = kfs
-      ? (kfs.find((k) => !Array.isArray(k.keyTuple) || k.keyTuple.length === 0
-          || k.keyTuple.every((v) => v === 0)) ?? kfs[0])
-      : null;
-    const restLocal = restKf && (ArrayBuffer.isView(restKf.vertexPositions) || Array.isArray(restKf.vertexPositions))
-      ? restKf.vertexPositions : null;
-    const restCanvasFlat = _flattenObjVerts(restVerts);
-    if (!restLocal || restLocal.length !== restCanvasFlat.length) {
-      logger.error(
-        'armatureModifierApply',
-        `Apply Armature FAILED on "${part.name ?? partId}" — leaf modifier `
-        + `"${leafMod.objectId ?? leafMod.deformerId ?? leafMod.type}" present but no usable rest keyform `
-        + `to reproject the bake into its local frame (refusing to write a canvas-px keyform that would fly off-canvas)`,
-        { partId, leafType: leafMod.type, hasRestKf: !!restKf,
-          restLocalLen: restLocal?.length ?? 0, restCanvasLen: restCanvasFlat.length },
-      );
-      return { baked: false, vertCount: 0, reason: 'reproject-no-rest-keyform' };
-    }
-    const fit = _fitAffine2D(restCanvasFlat, restLocal);
-    // Residual is in the leaf-local frame (warp: 0..1 units; rotation: px). A
-    // non-affine correspondence (non-uniform cage) can't be reprojected
-    // exactly — fail loud rather than land the part somewhere wrong.
-    if (!fit || fit.residual > 1e-2) {
-      logger.error(
-        'armatureModifierApply',
-        `Apply Armature FAILED on "${part.name ?? partId}" — rest correspondence for leaf `
-        + `"${leafMod.objectId ?? leafMod.deformerId ?? leafMod.type}" is not affine `
-        + `(residual=${fit ? fit.residual.toFixed(4) : 'singular'}); cannot reproject the bake into its local frame`,
-        { partId, leafType: leafMod.type, residual: fit?.residual ?? null },
-      );
-      return { baked: false, vertCount: 0, reason: 'reproject-non-affine' };
-    }
-    keyformVerts = new Array(baseVerts.length * 2);
-    for (let i = 0; i < baseVerts.length; i++) {
-      const [u, v] = fit.map(baseVerts[i].x, baseVerts[i].y);
-      keyformVerts[i * 2] = u;
-      keyformVerts[i * 2 + 1] = v;
-    }
-  } else {
-    // Root leaf — the keyform IS canvas-px (no chain to re-apply).
-    keyformVerts = new Array(baseVerts.length * 2);
-    for (let i = 0; i < baseVerts.length; i++) {
-      keyformVerts[i * 2] = baseVerts[i].x;
-      keyformVerts[i * 2 + 1] = baseVerts[i].y;
-    }
+  const reproj = reprojectBakeToLeafFrame(part, mesh, baseVerts);
+  if (!reproj.ok || !reproj.keyformVerts) {
+    logger.error(
+      'armatureModifierApply',
+      `Apply Armature FAILED on "${part.name ?? partId}" — ${reproj.reason} `
+      + `(refusing to write a keyform in the wrong frame that would fly the part off-canvas)`,
+      { partId, reason: reproj.reason },
+    );
+    return { baked: false, vertCount: 0, reason: reproj.reason ?? 'reproject-failed' };
   }
+  const keyformVerts = reproj.keyformVerts;
 
   // Write the baked verts into mesh.vertices, remove the Armature
   // modifier, and replace `mesh.runtime` with a single rest keyform in the
