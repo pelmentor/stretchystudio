@@ -71,6 +71,9 @@ export function IdleMotionDialog({ open, onOpenChange }) {
   // and strength. The 🎲 button next to the field rerolls; type a number to
   // pin a variation you like.
   const [seed, setSeed] = useState(() => randomSeed());
+  // Optional HARD ceiling on breath depth (0..1). Empty = auto/uncapped. Breath
+  // strength is ALWAYS randomised per seed; this just caps how deep it can go.
+  const [maxBreath, setMaxBreath] = useState('');
   // Reroll the seed each time the dialog opens so successive generations vary
   // by default (the user can still type a fixed seed to reproduce one).
   useEffect(() => { if (open) setSeed(randomSeed()); }, [open]);
@@ -127,8 +130,15 @@ export function IdleMotionDialog({ open, onOpenChange }) {
         }
       }
 
+      // Empty field → null (auto/uncapped). Clamp a typed value to 0..1.
+      const trimmedBreath = String(maxBreath).trim();
+      const maxBreathStrength = trimmedBreath === ''
+        ? null
+        : Math.max(0, Math.min(1, Number(trimmedBreath)));
+
       const result = buildMotion3({
         preset, paramIds, physicsOutputIds, durationSec, fps, personality, seed,
+        maxBreathStrength,
       });
 
       if (result.validationErrors && result.validationErrors.length > 0) {
@@ -320,6 +330,23 @@ export function IdleMotionDialog({ open, onOpenChange }) {
               >
                 <Dices className="h-4 w-4" />
               </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 items-center gap-3">
+            <Label htmlFor="idle-breath">Max breath</Label>
+            <div className="col-span-2 flex flex-col gap-1">
+              <Input
+                id="idle-breath"
+                type="number"
+                min={0} max={1} step={0.05}
+                placeholder="auto (uncapped)"
+                value={maxBreath}
+                onChange={(e) => setMaxBreath(e.target.value)}
+              />
+              <span className="text-[10px] text-muted-foreground">
+                0..1 ceiling on breath depth — leave empty for auto. Strength is always randomised per seed.
+              </span>
             </div>
           </div>
 

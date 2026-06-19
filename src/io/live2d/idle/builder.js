@@ -54,6 +54,10 @@ export function makeLoopingCyclesModifier() {
  * @property {number}         [fps=30]            - Recorded Meta.Fps
  * @property {string}         [personality='calm']
  * @property {number}         [seed=1]
+ * @property {number|null}    [maxBreathStrength=null] - Optional HARD ceiling on
+ *   breath depth, 0..1 as a fraction of ParamBreath's max room. Breath strength
+ *   is always randomised per seed in [0.5·cap .. cap]; this sets `cap`. null →
+ *   cap is the personality-scaled base.
  */
 
 /**
@@ -69,9 +73,13 @@ export function makeLoopingCyclesModifier() {
 
 const VALID_PERSONALITIES = new Set(PERSONALITY_PRESETS);
 
+/** Per-seed breath strength is drawn in [FLOOR·cap .. cap] — half-to-full depth
+ *  so no two seeds breathe the same, without ever flat-lining to zero. */
+const BREATH_STRENGTH_FLOOR = 0.5;
+
 /* ── Per-param keyframe synthesis ─────────────────────────────────────── */
 
-function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
+function synthesiseKeyframes(paramId, def, durationMs, personality, seed, maxBreathStrength) {
   const cfg = applyPersonality({ ...def.cfg }, personality);
 
   // Per-seed PHENOTYPE jitter for analytic sines (breath, body sway, brows).
@@ -89,9 +97,26 @@ function synthesiseKeyframes(paramId, def, durationMs, personality, seed) {
   if (def.kind === 'sine') {
     const ph = makeRng(seed * 53 + hashCode(paramId) * 7 + 1);
     const jitter = (spread) => 1 + (ph() * 2 - 1) * spread;
-    if (typeof cfg.period === 'number')    cfg.period    *= jitter(0.22);   // ±22 % rate
-    if (typeof cfg.amplitude === 'number') cfg.amplitude *= jitter(0.20);   // ±20 % strength
-    if (typeof cfg.phase === 'number')     cfg.phase     += (ph() * 2 - 1) * 0.5; // ±0.5 rad desync
+    if (typeof cfg.period === 'number') cfg.period *= jitter(0.22);   // ±22 % rate
+    if (paramId === 'ParamBreath' && typeof cfg.amplitude === 'number') {
+      // BREATH STRENGTH gets a DEDICATED, wide per-seed draw (not the ±20 %
+      // others get): breath sits near the param ceiling, so a symmetric jitter
+      // is clipped on the high side and reads as "everyone breathes the same".
+      // Draw the amplitude in [FLOOR·cap .. cap]:
+      //   cap = maxBreathStrength (a HARD ceiling, 0..1 fraction of the param's
+      //         max room) when the caller set one, else the personality-scaled
+      //         base. So each seed gets a visibly different breath depth, and an
+      //         optional cap lets the user keep it shallow.
+      const mid = cfg.mid ?? 0;
+      const room = Math.max(0, Math.min(def.defaultMax - mid, mid - def.defaultMin));
+      const cap = (typeof maxBreathStrength === 'number' && maxBreathStrength > 0)
+        ? Math.min(maxBreathStrength, 1) * room
+        : cfg.amplitude;
+      cfg.amplitude = cap * (BREATH_STRENGTH_FLOOR + ph() * (1 - BREATH_STRENGTH_FLOOR));
+    } else if (typeof cfg.amplitude === 'number') {
+      cfg.amplitude *= jitter(0.20);   // ±20 % strength (body sway / brows)
+    }
+    if (typeof cfg.phase === 'number') cfg.phase += (ph() * 2 - 1) * 0.5; // ±0.5 rad desync
   }
 
   // Pre-clamp amplitude so generated peaks/troughs land STRICTLY inside
@@ -306,6 +331,7 @@ export function buildMotion3({
   fps = 30,
   personality = 'calm',
   seed = 1,
+  maxBreathStrength = null,
 }) {
   const presetEntry = getPresetTable(preset);
   if (!presetEntry) {
@@ -319,6 +345,10 @@ export function buildMotion3({
   }
   if (!Number.isFinite(durationSec) || durationSec < 1 || durationSec > 60) {
     throw new Error(`buildMotion3: invalid durationSec ${durationSec} (must be 1..60)`);
+  }
+  if (maxBreathStrength != null
+      && (!Number.isFinite(maxBreathStrength) || maxBreathStrength < 0 || maxBreathStrength > 1)) {
+    throw new Error(`buildMotion3: invalid maxBreathStrength ${maxBreathStrength} (must be 0..1 or null)`);
   }
 
   const presetTable = presetEntry.params;
@@ -349,7 +379,7 @@ export function buildMotion3({
 
   for (const id of targetParams) {
     const def = presetTable[id];
-    const kfs = synthesiseKeyframes(id, def, durationMs, personality, seed);
+    const kfs = synthesiseKeyframes(id, def, durationMs, personality, seed, maxBreathStrength);
     if (!kfs || kfs.length < 2) continue;
 
     const segments = encodeKeyframesToSegments(kfs, durationSec);

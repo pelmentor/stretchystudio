@@ -49,6 +49,7 @@ Options:
 | `--fps N` | `30` | Recorded `Meta.Fps` |
 | `--personality NAME` | `calm` | One of: `calm`, `energetic`, `tired`, `nervous`, `confident` |
 | `--seed N` | random each run | PRNG seed — drives breath rate/depth + wander/blink. Omit for a fresh variation every run (the chosen seed is printed so you can pin it); pass `N` to reproduce one |
+| `--breath-strength F` | auto | Optional `0..1` HARD ceiling on breath depth (fraction of the param's max room). Breath strength is ALWAYS randomised per seed; this just caps how deep it can go (e.g. `0.3` for shallow, calm breathing) |
 | `--register` | off | Append motion(s) to `model3.json`'s `Motions` block under each preset's group |
 
 Examples:

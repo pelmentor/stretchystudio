@@ -17,6 +17,7 @@
 //   --fps <n>             Recorded fps in Meta (default: 30)
 //   --personality <name>  calm | energetic | tired | nervous | confident (default: calm)
 //   --seed <int>          Deterministic seed (default: random each run, printed for pinning)
+//   --breath-strength <f> Optional 0..1 cap on breath depth (always randomised per seed)
 //   --register            Append generated motion(s) to model3.json's Motions block
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -83,7 +84,7 @@ function parseArgs(argv) {
   // seed: null means "not specified → pick a fresh RANDOM seed in main() so
   // every generation differs". Pass --seed N for a reproducible result (the
   // chosen seed is always printed so a good one can be pinned).
-  const args = { _: [], duration: null, fps: 30, personality: 'calm', seed: null, register: false, presets: [] };
+  const args = { _: [], duration: null, fps: 30, personality: 'calm', seed: null, breathStrength: null, register: false, presets: [] };
   let i = 0;
   while (i < argv.length) {
     const a = argv[i];
@@ -92,6 +93,7 @@ function parseArgs(argv) {
     else if (a === '--fps')         { args.fps = parseInt(argv[++i], 10); }
     else if (a === '--personality') { args.personality = argv[++i]; }
     else if (a === '--seed')        { args.seed = parseInt(argv[++i], 10); }
+    else if (a === '--breath-strength') { args.breathStrength = parseFloat(argv[++i]); }
     else if (a === '--register')    { args.register = true; }
     else if (a === '--preset')      {
       const v = argv[++i];
@@ -186,6 +188,8 @@ Options:
   --fps <n>              Meta.Fps (default: 30)
   --personality <name>   ${PERSONALITY_PRESETS.join(' | ')} (default: calm)
   --seed <int>           Deterministic seed (default: random each run — printed so you can pin it)
+  --breath-strength <f>  Optional 0..1 HARD ceiling on breath depth. Breath strength is
+                         always randomised per seed; this caps it (default: auto/uncapped).
   --register             Append motion(s) to model3.json's Motions block
   -h, --help             This help.
 `);
@@ -224,6 +228,12 @@ async function main() {
   const seedWasRandom = !Number.isFinite(args.seed);
   if (seedWasRandom) args.seed = randomInt(1, 0x7fffffff);
 
+  if (args.breathStrength != null
+      && (!Number.isFinite(args.breathStrength) || args.breathStrength < 0 || args.breathStrength > 1)) {
+    console.error(`Invalid --breath-strength ${args.breathStrength} (must be 0..1)`);
+    process.exit(1);
+  }
+
   const presets = resolvePresets(args.presets);
   const model3 = JSON.parse(readFileSync(model3Path, 'utf8'));
   const paramIds = discoverParams(model3Path, model3);
@@ -247,6 +257,7 @@ async function main() {
         fps: args.fps,
         personality: args.personality,
         seed: args.seed,
+        maxBreathStrength: args.breathStrength,
       });
     } catch (err) {
       console.error(`[FAIL ${preset}] ${err.message}`);
@@ -290,6 +301,7 @@ async function main() {
     console.log(`[OK ${preset}] ${basename(outPath)}`);
     console.log(`     ${m.Duration}s @ ${m.Fps}fps, ${m.CurveCount} curves, ${m.TotalSegmentCount} segments`);
     console.log(`     personality=${args.personality} seed=${args.seed}${seedWasRandom ? ' (random — pass --seed ' + args.seed + ' to reproduce)' : ''}`);
+    console.log(`     breath strength=${args.breathStrength != null ? `≤${args.breathStrength} (capped)` : 'auto'}, randomised per seed`);
     console.log(`     animated: ${result.animatedIds.join(', ')}`);
   }
 
