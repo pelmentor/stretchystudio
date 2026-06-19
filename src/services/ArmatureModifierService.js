@@ -434,6 +434,15 @@ export function applyArmatureModifier(partId) {
     for (let i = 0; i < verts.length; i++) {
       verts[i].x = baseVerts[i].x;
       verts[i].y = baseVerts[i].y;
+      // Bake into the REST geometry too. `restX/restY` (captured at PSD import,
+      // updated alongside x/y by mesh-edit) is the canonical rest pose:
+      // `resetToRestPose` snaps `x = restX` and the exporter reads
+      // `v.restX ?? v.x`. Writing only x/y left the bake transient — the next
+      // Init Rig reset and every export reverted to the pre-bake shape (the
+      // user's "arm snaps back" + "exports pre-bake"). Apply means "this IS the
+      // new rest", so restX/restY MUST follow x/y — same as Apply Pose as Rest.
+      verts[i].restX = baseVerts[i].x;
+      verts[i].restY = baseVerts[i].y;
     }
     if (Array.isArray(target.modifiers)) {
       const idx = target.modifiers.findIndex((m) => m?.type === 'armature');
