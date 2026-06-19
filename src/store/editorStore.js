@@ -402,6 +402,19 @@ export const useEditorStore = create((set) => ({
     const sameHead = nodeIds.length > 0 && nodeIds[0] === state.selection[0];
     if (sameHead) return { selection: nodeIds };
 
+    // POSE mode is armature-level: deselecting all BONES (e.g. Alt+A, or the
+    // A select-all toggle's deselect branch) must NOT leave Pose Mode — you're
+    // still posing the armature, just with nothing selected (Blender's
+    // behaviour). Per-part modes (edit / sculpt / weightPaint) DO exit on an
+    // empty selection — there's no part left to edit — so they fall through to
+    // the head-change path below (which drops editMode). Pre-fix Pose Mode fell
+    // through too, so pressing A in Pose Mode (toggle → deselect-all →
+    // setSelection([])) kicked the user out to Object Mode. zustand's shallow
+    // merge preserves editMode by omitting it from the returned patch.
+    if (nodeIds.length === 0 && state.editMode === 'pose') {
+      return { selection: nodeIds, selectedVertexIndices: new Map(), activeVertex: null };
+    }
+
     // Blender's "Lock Object Modes" (preferencesStore.lockObjectModes,
     // default true): while in edit mode, selection-head changes to a
     // DIFFERENT node are rejected. The user stays focused on the

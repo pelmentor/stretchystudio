@@ -62,6 +62,20 @@ reset();
   assert(get().editMode === null, 'setSelection([]): editMode exited');
 }
 
+// ── setSelection([]) in POSE mode KEEPS pose mode (armature-level) ─────
+// Regression: pressing A in Pose Mode toggles to deselect-all → setSelection([]).
+// Pose mode is armature-level, so an empty bone selection must NOT drop to
+// Object Mode (the user's "A kicks me out to object mode"). Per-part edit modes
+// still exit (the test above) — only pose is preserved.
+
+{
+  reset();
+  useEditorStore.setState({ selection: ['bone-1'], editMode: 'pose' });
+  get().setSelection([]);
+  assert(get().selection.length === 0, 'pose deselect-all: cleared');
+  assert(get().editMode === 'pose', 'pose deselect-all: STAYS in pose mode (not kicked to object)');
+}
+
 // ── setSelection: switching to different node exits edit mode ──────
 // (with Lock Object Modes OFF — covered by the dedicated lock tests below)
 
